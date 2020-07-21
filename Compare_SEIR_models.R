@@ -286,10 +286,10 @@ compRes = compare_models(params_SEIIR = params1,
                           Rep = 100)
 dev.off()
 
-compRes2 = compare_models(params_SEIIR = params1, 
-                         params_SEI2IR = params2, 
-                         N = 200, tmax = 200,
-                         Rep = 10)
+saveRDS(compRes,"compare_SEIR_summmary.rds")
 
-# To Do: add summary statistics visualization as well as trajectory visualization
+# compRes2 = compare_models(params_SEIIR = params1, 
+#                          params_SEI2IR = params2, 
+#                          N = 200, tmax = 200,
+#                          Rep = 10)
 
