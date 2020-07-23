@@ -293,3 +293,21 @@ saveRDS(compRes,"compare_SEIR_summmary.rds")
 #                          N = 200, tmax = 200,
 #                          Rep = 10)
 
+
+
+
+# set.seed(101)
+# dd <- data.frame(x=rnorm(3000),y=rnorm(3000))
+# library(ggplot2); theme_set(theme_bw())
+# 
+# ggplot(dd,aes(x,y))+stat_density_2d(geom="raster",
+#                                     aes(alpha = ..density..), contour = FALSE)+
+#   scale_x_continuous(expand=c(0,0))+
+#   scale_y_continuous(expand=c(0,0))
+
+# TO DO:
+# 1. work with discretized observations (maybe weekly observations??, or just daily?)
+# 2. compute time-step-wise p-values 
+#    (1000 trajectories for one model, compared with trajectory from another model)
+# 3. make plots
+#    (1000 trajectories for one model, overlayed with trajectory from another model)
