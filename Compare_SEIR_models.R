@@ -3,6 +3,7 @@
 # Simulate two SEIR extension models and compare
 
 library(GillespieSSA)
+library(ggplot2); theme_set(theme_bw(base_size = 14))
 
 # 1. SEIIR
 
@@ -225,7 +226,6 @@ compare_models <- function(params_SEIIR, params_SEI2IR, N, tmax,
   rownames(summ_SEI2IR) = NULL
   
   ## 3. compare by KS test (approx. p values under ties...)
-  ## TO DO
   m = ncol(summ_SEIIR)
   pvals = numeric(m)
   for(j in 1:m){
@@ -294,16 +294,258 @@ saveRDS(compRes,"compare_SEIR_summmary.rds")
 #                          Rep = 10)
 
 
+# 5A. a function for discretization
+# default: 100 days, daily counts
+get_discrete <- function(resList, tmax=100, tau=1){
+  dat = resList$data
+  
+  times = dat[,"t"]
+  values = dat[,2:ncol(dat)]
+  
+  
+  obs = values[1,] %>% as.numeric()
+  ts = seq(from=0, to=tmax, by=tau)
+  
+  # if(tmax > ceiling(max(times))){
+  #   ind.max = min(which(ts > max(times)))
+  #   for(t in ts[2:ind.max]){
+  #     ind = max(which(times <= t))
+  #     y_t = values[ind,] %>% as.numeric()
+  #     obs = rbind(obs, y_t)
+  #   }
+  # }
+  
+  for(t in ts){
+    if(t!=0){
+      ## find the event time t_i such that t_i <= t < t_{i+1}
+      ind = max(which(times <= t))
+      y_t = values[ind,] %>% as.numeric()
+      obs = rbind(obs, y_t)
+    }
+  }
+  
+  res = cbind(ts, obs)
+  rownames(res) = NULL
+  res = res %>% as.data.frame()
+  names(res) = colnames(dat)
+  
+  return(res)
+
+}
 
 
-# set.seed(101)
-# dd <- data.frame(x=rnorm(3000),y=rnorm(3000))
-# library(ggplot2); theme_set(theme_bw())
-# 
-# ggplot(dd,aes(x,y))+stat_density_2d(geom="raster",
-#                                     aes(alpha = ..density..), contour = FALSE)+
-#   scale_x_continuous(expand=c(0,0))+
-#   scale_y_continuous(expand=c(0,0))
+# 5B. compare distribution of one thing against observation of another thing
+compare_against <- function(x, y){
+  # x: a vector
+  # y: a number
+  
+  tail_p = mean(x < y)
+  if(tail_p < 0.5){
+    2 * tail_p
+  }else{
+    2 * (1- tail_p)
+  }
+}
+
+# 5C. compare one discrete data with another
+# dat1 < dat2
+compare_discrete <- function(params_SEIIR, params_SEI2IR, N, tmax, 
+                             Rep1=200, Rep2=1, disc_tmax=100, tau=1){
+  
+  if(Rep1 > 1){
+    # use SEIIR results as reference
+    cat("Using SEIIR model as reference model!\n")
+    
+    ## 1. sample one sequence from SEI2IR
+    res_SEI2IR = with(as.list(params_SEI2IR), {
+      sim_SEI2IR(beta = beta, eta = eta, 
+                 phai = phai, phiS = phiS, 
+                 gammaA = gammaA, gammaS = gammaS, 
+                 N=N, tmax = tmax,
+                 plot = F)
+    })
+    disc_SEI2IR = get_discrete(res_SEI2IR, disc_tmax, tau)
+    cat("SEI2IR simulation done.\n")
+    
+    ## 2. sample a lot of sequences from SEIIR
+    events_SEIIR = NULL
+    
+    for(r in 1:Rep1){
+      ### A. simulate
+      this_res = with(as.list(params_SEIIR), {
+        sim_SEIIR(beta = beta, eta = eta, 
+                  phai = phai, ps = ps, 
+                  gammaA = gammaA, gammaS = gammaS, 
+                  N=N, tmax = tmax, seed = r,
+                  plot = F)
+      })
+      ### B. discretize
+      this_disc = get_discrete(this_res, disc_tmax, tau)
+      
+      ### C. compare discrete data
+      if(r == 1){
+        compare = disc_SEI2IR < this_disc
+      }else{
+        compare = compare + (disc_SEI2IR < this_disc)
+      }
+      
+      ### D. save events for plotting
+      if(r <= 100){
+        # record 100 event sequences at most!
+        events_SEIIR = rbind(events_SEIIR, this_disc)
+      }
+      cat(r,"\r")
+    }
+    cat("\n")
+    
+    ## post-process "compare"
+    compare = compare[,-1]/Rep1
+    for(c in 1:ncol(compare)){
+      compare[,c] = sapply(compare[,c], function(p) ifelse(p<0.5, 2*p, 2*(1-p)))
+    }
+    
+    Names = colnames(compare)
+    compare = compare %>% as.data.frame()
+    names(compare) = Names
+    compare$t = disc_SEI2IR$t
+    
+    return(list(event1 = disc_SEI2IR, event2 = events_SEIIR, 
+                compare = compare, reference = "SEIIR"))
+  }else{
+    # use SEI2IR results as reference
+    cat("Using SEI2IR model as reference model!\n")
+    
+    ## 1. sample one sequence from SEIIR
+    res_SEIIR = with(as.list(params_SEIIR), {
+      sim_SEIIR(beta = beta, eta = eta, 
+                phai = phai, ps = ps, 
+                gammaA = gammaA, gammaS = gammaS, 
+                N=N, tmax = tmax,
+                plot = F)
+    })
+    disc_SEIIR = get_discrete(res_SEIIR, disc_tmax, tau)
+    cat("SEIIR simulation done.\n")
+    
+    ## 2. sample a lot of sequences from SEI2IR
+    events_SEI2IR = NULL
+    
+    for(r in 1:Rep2){
+      ### A. simulate
+      this_res = with(as.list(params_SEI2IR), {
+        sim_SEI2IR(beta = beta, eta = eta, 
+                   phai = phai, phiS = phiS, 
+                   gammaA = gammaA, gammaS = gammaS, 
+                   N=N, tmax = tmax, seed = r,
+                   plot = F)
+      })
+      ### B. discretize
+      this_disc = get_discrete(this_res, disc_tmax, tau)
+      
+      ### C. compare discrete data
+      if(r == 1){
+        compare = disc_SEIIR < this_disc
+      }else{
+        compare = compare + (disc_SEIIR < this_disc)
+      }
+      
+      ### D. save events for plotting
+      if(r <= 100){
+        # record 100 event sequences at most!
+        events_SEI2IR = rbind(events_SEI2IR, this_disc)
+      }
+      cat(r,"\r")
+    }
+    cat("\n")
+    
+    ## post-process "compare"
+    compare = compare[,-1]/Rep2
+    for(c in 1:ncol(compare)){
+      compare[,c] = sapply(compare[,c], function(p) ifelse(p<0.5, 2*p, 2*(1-p)))
+    }
+    
+    Names = colnames(compare)
+    compare = compare %>% as.data.frame()
+    names(compare) = Names
+    compare$t = disc_SEIIR$t
+    
+    return(list(event1 = disc_SEIIR, event2 = events_SEI2IR, 
+                compare = compare, reference="SEI2IR"))
+  }
+}
+
+## try it out
+CD_res1 = compare_discrete(params_SEIIR = params1, 
+                           params_SEI2IR = params2, 
+                           N = 200, tmax = 200,
+                           Rep1 = 300)
+
+CD_res2 = compare_discrete(params_SEIIR = params1, 
+                           params_SEI2IR = params2, 
+                           N = 200, tmax = 200,
+                           Rep1 = 1, Rep2 = 300)
+
+
+# 6. function to visualize results from "compare_discrete"
+visualize_CD <- function(CDList){
+  event1 = CDList$event1
+  event2 = CDList$event2
+  
+  compare = CDList$compare
+  
+  ## 1: plot aggregate counts over time
+  for(n in names(event1)[-1]){
+    print(
+      ggplot(data=CD_res$event2, aes_string(x="t", y=n)) +
+        stat_density_2d(geom="raster",
+                        aes(alpha = ..density..), contour = FALSE,
+                        fill="blue")+
+        scale_x_continuous(expand=c(0,0))+
+        scale_y_continuous(expand=c(0,0))+
+        geom_line(data=CD_res$event1, aes_string(x="t", y=n), 
+                  color="red", size=1)+
+        labs(x='days',title=paste("Aggregate daily counts of",n))+
+        theme(legend.position = "none")
+    )
+  }
+  
+  ## 2: plot "p-values" in "compare"
+  
+  compare_long = compare %>% 
+    mutate(I = Ia + Is) %>%
+    select(t, S, E, I, R) %>%
+    gather(key='variable', value='value', -t)
+  
+  print(
+    ggplot(data=compare_long, aes(x=t, y=value)) +
+      geom_line(aes(color=variable)) +
+      geom_hline(yintercept = 0.05, size=0.5) +
+      labs(x='days', y='two-sided p-value',
+           title="Empirical 'p-values' of aggregate counts")
+  )
+  
+  # p_compare = ggplot(data=compare, aes(x=t)) +
+  #   geom_hline(yintercept = 0.05)
+  # for(i in 2:length(names(event1))){
+  #   p_compare = p_compare + 
+  #     geom_line(aes_string(y=names(event1)[i]), color=i) +
+  #     geom_point(aes_string(y=names(event1)[i]), color=i)
+  # }
+  # p_compare = p_compare + 
+  #   labs(x='days',title="Empirical 'p-values' of daily aggregate counts")
+  # print(p_compare)
+}
+
+
+## try it out 
+pdf("Compare_SEIR_discrete_1.pdf", height = 5, width = 9)
+visualize_CD(CD_res1)
+dev.off()
+
+pdf("Compare_SEIR_discrete_2.pdf", height = 5, width = 9)
+visualize_CD(CD_res2)
+dev.off()
+
+
 
 # TO DO:
 # 1. work with discretized observations (maybe weekly observations??, or just daily?)
