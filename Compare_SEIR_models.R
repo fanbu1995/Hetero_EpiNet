@@ -489,21 +489,23 @@ CD_res2 = compare_discrete(params_SEIIR = params1,
 visualize_CD <- function(CDList){
   event1 = CDList$event1
   event2 = CDList$event2
+  ref = CDList$reference
   
   compare = CDList$compare
   
   ## 1: plot aggregate counts over time
   for(n in names(event1)[-1]){
     print(
-      ggplot(data=CD_res$event2, aes_string(x="t", y=n)) +
+      ggplot(data=event2, aes_string(x="t", y=n)) +
         stat_density_2d(geom="raster",
                         aes(alpha = ..density..), contour = FALSE,
                         fill="blue")+
         scale_x_continuous(expand=c(0,0))+
         scale_y_continuous(expand=c(0,0))+
-        geom_line(data=CD_res$event1, aes_string(x="t", y=n), 
+        geom_line(data=event1, aes_string(x="t", y=n), 
                   color="red", size=1)+
-        labs(x='days',title=paste("Aggregate daily counts of",n))+
+        labs(x='days',title=paste("Aggregate daily counts of",n),
+             caption = paste("Reference model:", ref))+
         theme(legend.position = "none")
     )
   }
@@ -511,8 +513,8 @@ visualize_CD <- function(CDList){
   ## 2: plot "p-values" in "compare"
   
   compare_long = compare %>% 
-    mutate(I = Ia + Is) %>%
-    select(t, S, E, I, R) %>%
+    #mutate(I = Ia + Is) %>%
+    #select(t, S, E, I, R) %>%
     gather(key='variable', value='value', -t)
   
   print(
@@ -520,7 +522,8 @@ visualize_CD <- function(CDList){
       geom_line(aes(color=variable)) +
       geom_hline(yintercept = 0.05, size=0.5) +
       labs(x='days', y='two-sided p-value',
-           title="Empirical 'p-values' of aggregate counts")
+           title="Empirical 'p-values' of aggregate counts",
+           caption = paste("Reference model:", ref))
   )
   
   # p_compare = ggplot(data=compare, aes(x=t)) +
