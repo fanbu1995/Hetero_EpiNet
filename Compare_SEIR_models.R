@@ -350,7 +350,11 @@ compare_against <- function(x, y){
 # 5C. compare one discrete data with another
 # dat1 < dat2
 compare_discrete <- function(params_SEIIR, params_SEI2IR, N, tmax, 
-                             Rep1=200, Rep2=1, disc_tmax=100, tau=1){
+                             Rep1=200, Rep2=1, 
+                             disc_tmax=100, tau=1,
+                             plotRuns = 300){
+  
+  # 08/01/2020: allow plotting more runs in the "background"
   
   if(Rep1 > 1){
     # use SEIIR results as reference
@@ -390,7 +394,7 @@ compare_discrete <- function(params_SEIIR, params_SEI2IR, N, tmax,
       }
       
       ### D. save events for plotting
-      if(r <= 100){
+      if(r <= plotRuns){
         # record 100 event sequences at most!
         events_SEIIR = rbind(events_SEIIR, this_disc)
       }
@@ -449,7 +453,7 @@ compare_discrete <- function(params_SEIIR, params_SEI2IR, N, tmax,
       }
       
       ### D. save events for plotting
-      if(r <= 100){
+      if(r <= plotRuns){
         # record 100 event sequences at most!
         events_SEI2IR = rbind(events_SEI2IR, this_disc)
       }
@@ -486,7 +490,10 @@ CD_res2 = compare_discrete(params_SEIIR = params1,
 
 
 # 6. function to visualize results from "compare_discrete"
-visualize_CD <- function(CDList){
+visualize_CD <- function(CDList, 
+                         plotLimits = NULL){
+  # plotLimits: a list for y-axis upper limits of the aggregate count plots
+  
   event1 = CDList$event1
   event2 = CDList$event2
   ref = CDList$reference
@@ -494,37 +501,73 @@ visualize_CD <- function(CDList){
   compare = CDList$compare
   
   ## 1: plot aggregate counts over time
-  for(n in names(event1)[-1]){
-    print(
-      ggplot(data=event2, aes_string(x="t", y=n)) +
-        stat_density_2d(geom="raster",
-                        aes(alpha = ..density..), contour = FALSE,
-                        fill="blue")+
-        scale_x_continuous(expand=c(0,0))+
-        scale_y_continuous(expand=c(0,0))+
-        geom_line(data=event1, aes_string(x="t", y=n), 
-                  color="red", size=1)+
-        labs(x='days',title=paste("Aggregate daily counts of",n),
-             caption = paste("Reference model:", ref))+
-        theme(legend.position = "none")
-    )
+  if(is.null(plotLimits)){
+    for(n in names(event1)[-1]){
+      print(
+        ggplot(data=event2, aes_string(x="t", y=n)) +
+          stat_density_2d(geom="raster",
+                          aes(alpha = ..density..), contour = FALSE,
+                          fill="blue")+
+          #scale_alpha_continuous(range = c(0.3, 1)) +
+          scale_x_continuous(expand=c(0,0))+
+          scale_y_continuous(expand=c(0,0))+
+          geom_line(data=event1, aes_string(x="t", y=n), 
+                    color="red", size=1)+
+          labs(x='days',title=paste("Aggregate daily counts of",n),
+               caption = paste("Reference model:", ref))+
+          theme(legend.position = "none")
+      )
+    }
+  }else{
+    for(n in names(event1)[-1]){
+      print(
+        ggplot(data=event2, aes_string(x="t", y=n)) +
+          stat_density_2d(geom="raster",
+                          aes(alpha = ..density..), contour = FALSE,
+                          fill="blue")+
+          #scale_alpha_continuous(range = c(0.3, 1)) +
+          scale_x_continuous(expand=c(0,0))+
+          scale_y_continuous(limits = c(0,plotLimits[[n]]), expand=c(0,0))+
+          geom_line(data=event1, aes_string(x="t", y=n), 
+                    color="red", size=1)+
+          labs(x='days',title=paste("Aggregate daily counts of",n),
+               caption = paste("Reference model:", ref))+
+          theme(legend.position = "none")
+      )
+    }
   }
+  
   
   ## 2: plot "p-values" in "compare"
   
-  compare_long = compare %>% 
-    #mutate(I = Ia + Is) %>%
-    #select(t, S, E, I, R) %>%
+  ## a: plot S,E,R first
+  compare_a = compare %>% 
+    select(t, S, E, R) %>%
     gather(key='variable', value='value', -t)
   
   print(
-    ggplot(data=compare_long, aes(x=t, y=value)) +
+    ggplot(data=compare_a, aes(x=t, y=value)) +
       geom_line(aes(color=variable)) +
       geom_hline(yintercept = 0.05, size=0.5) +
       labs(x='days', y='two-sided p-value',
            title="Empirical 'p-values' of aggregate counts",
            caption = paste("Reference model:", ref))
   )
+  
+  ## b: then plot Ia and Is
+  compare_b = compare %>% 
+    select(t, Ia, Is) %>%
+    gather(key='variable', value='value', -t)
+  
+  print(
+    ggplot(data=compare_b, aes(x=t, y=value)) +
+      geom_line(aes(color=variable)) +
+      geom_hline(yintercept = 0.05, size=0.5) +
+      labs(x='days', y='two-sided p-value',
+           title="Empirical 'p-values' of aggregate counts",
+           caption = paste("Reference model:", ref))
+  )
+  
   
   # p_compare = ggplot(data=compare, aes(x=t)) +
   #   geom_hline(yintercept = 0.05)
@@ -550,9 +593,29 @@ dev.off()
 
 
 
-# TO DO:
-# 1. work with discretized observations (maybe weekly observations??, or just daily?)
-# 2. compute time-step-wise p-values 
-#    (1000 trajectories for one model, compared with trajectory from another model)
-# 3. make plots
-#    (1000 trajectories for one model, overlayed with trajectory from another model)
+# 08/01/2020
+# do it with more simulation runs
+
+PL = list(S=105, E=35, Ia = 20, Is = 40, R = 105)
+
+CD_res1 = compare_discrete(params_SEIIR = params1, 
+                           params_SEI2IR = params2, 
+                           N = 200, tmax = 200,
+                           Rep1 = 1000, 
+                           plotRuns = 500)
+
+pdf("Compare_SEIR_Ref_M1_500.pdf", height = 5, width = 9)
+visualize_CD(CD_res1, plotLimits = PL)
+dev.off()
+
+CD_res2 = compare_discrete(params_SEIIR = params1, 
+                           params_SEI2IR = params2, 
+                           N = 200, tmax = 200,
+                           Rep1 = 1, Rep2 = 1000, 
+                           plotRuns = 500)
+
+pdf("Compare_SEIR_Ref_M2_500.pdf", height = 5, width = 9)
+visualize_CD(CD_res2, plotLimits = PL)
+dev.off()
+
+save(CD_res1, CD_res2, file="compare_SEIR_500.RData")
