@@ -3,6 +3,7 @@
 # Simulate two SEIR extension models and compare
 
 library(GillespieSSA)
+library(tidyverse)
 library(ggplot2); theme_set(theme_bw(base_size = 14))
 
 # 1. SEIIR
@@ -491,8 +492,9 @@ CD_res2 = compare_discrete(params_SEIIR = params1,
 
 # 6. function to visualize results from "compare_discrete"
 visualize_CD <- function(CDList, 
-                         plotLimits = NULL){
+                         plotLimits = NULL, smooth=FALSE){
   # plotLimits: a list for y-axis upper limits of the aggregate count plots
+  # smooth: whether or not to smooth over the p-vals
   
   event1 = CDList$event1
   event2 = CDList$event2
@@ -503,6 +505,7 @@ visualize_CD <- function(CDList,
   ## 1: plot aggregate counts over time
   if(is.null(plotLimits)){
     for(n in names(event1)[-1]){
+      # a): plot line overlay the background
       print(
         ggplot(data=event2, aes_string(x="t", y=n)) +
           stat_density_2d(geom="raster",
@@ -517,9 +520,25 @@ visualize_CD <- function(CDList,
                caption = paste("Reference model:", ref))+
           theme(legend.position = "none")
       )
+      
+      # b): show the background only
+      print(
+        ggplot(data=event2, aes_string(x="t", y=n)) +
+          stat_density_2d(geom="raster",
+                          aes(alpha = ..density..), contour = FALSE,
+                          fill="blue")+
+          scale_x_continuous(expand=c(0,0))+
+          scale_y_continuous(expand=c(0,0))+
+          # geom_line(data=event1, aes_string(x="t", y=n), 
+          #           color="red", size=1)+
+          labs(x='days',title=paste("Aggregate daily counts of",n),
+               caption = paste("Reference model:", ref))+
+          theme(legend.position = "none")
+      )
     }
   }else{
     for(n in names(event1)[-1]){
+      # a): plot line overlay the background
       print(
         ggplot(data=event2, aes_string(x="t", y=n)) +
           stat_density_2d(geom="raster",
@@ -530,6 +549,21 @@ visualize_CD <- function(CDList,
           scale_y_continuous(limits = c(0,plotLimits[[n]]), expand=c(0,0))+
           geom_line(data=event1, aes_string(x="t", y=n), 
                     color="red", size=1)+
+          labs(x='days',title=paste("Aggregate daily counts of",n),
+               caption = paste("Reference model:", ref))+
+          theme(legend.position = "none")
+      )
+      
+      # b): show the background only
+      print(
+        ggplot(data=event2, aes_string(x="t", y=n)) +
+          stat_density_2d(geom="raster",
+                          aes(alpha = ..density..), contour = FALSE,
+                          fill="blue")+
+          scale_x_continuous(expand=c(0,0))+
+          scale_y_continuous(expand=c(0,0))+
+          # geom_line(data=event1, aes_string(x="t", y=n), 
+          #           color="red", size=1)+
           labs(x='days',title=paste("Aggregate daily counts of",n),
                caption = paste("Reference model:", ref))+
           theme(legend.position = "none")
@@ -545,29 +579,54 @@ visualize_CD <- function(CDList,
     select(t, S, E, R) %>%
     gather(key='variable', value='value', -t)
   
-  print(
-    ggplot(data=compare_a, aes(x=t, y=value)) +
-      geom_line(aes(color=variable)) +
-      geom_hline(yintercept = 0.05, size=0.5) +
-      labs(x='days', y='two-sided p-value',
-           title="Empirical 'p-values' of aggregate counts",
-           caption = paste("Reference model:", ref))
-  )
+  if(smooth){
+    print(
+      ggplot(data=compare_a, aes(x=t, y=value)) +
+        geom_smooth(aes(color=variable), se=FALSE,
+                    method='auto', span=0.1) +
+        geom_hline(yintercept = 0.05, size=0.5) +
+        labs(x='days', y='two-sided p-value',
+             title="Empirical 'p-values' of aggregate counts",
+             caption = paste("Reference model:", ref))
+    )
+  }else{
+    print(
+      ggplot(data=compare_a, aes(x=t, y=value)) +
+        geom_line(aes(color=variable)) +
+        geom_hline(yintercept = 0.05, size=0.5) +
+        labs(x='days', y='two-sided p-value',
+             title="Empirical 'p-values' of aggregate counts",
+             caption = paste("Reference model:", ref))
+    )
+  }
+  
+  
   
   ## b: then plot Ia and Is
   compare_b = compare %>% 
     select(t, Ia, Is) %>%
     gather(key='variable', value='value', -t)
   
-  print(
-    ggplot(data=compare_b, aes(x=t, y=value)) +
-      geom_line(aes(color=variable)) +
-      geom_hline(yintercept = 0.05, size=0.5) +
-      labs(x='days', y='two-sided p-value',
-           title="Empirical 'p-values' of aggregate counts",
-           caption = paste("Reference model:", ref))
-  )
-  
+  if(!smooth){
+    print(
+      ggplot(data=compare_b, aes(x=t, y=value)) +
+        geom_line(aes(color=variable)) +
+        geom_hline(yintercept = 0.05, size=0.5) +
+        labs(x='days', y='two-sided p-value',
+             title="Empirical 'p-values' of aggregate counts",
+             caption = paste("Reference model:", ref))
+    )
+  }else{
+    print(
+      ggplot(data=compare_b, aes(x=t, y=value)) +
+        geom_smooth(aes(color=variable), se=FALSE,
+                    method='auto', span=0.1) +
+        geom_hline(yintercept = 0.05, size=0.5) +
+        labs(x='days', y='two-sided p-value',
+             title="Empirical 'p-values' of aggregate counts",
+             caption = paste("Reference model:", ref))
+    )
+  }
   
   # p_compare = ggplot(data=compare, aes(x=t)) +
   #   geom_hline(yintercept = 0.05)
@@ -619,3 +678,45 @@ visualize_CD(CD_res2, plotLimits = PL)
 dev.off()
 
 save(CD_res1, CD_res2, file="compare_SEIR_500.RData")
+
+
+# 08/31/2020:
+# re-make some visualizations
+load("compare_SEIR_500.RData")
+
+PL = list(S=105, E=35, Ia = 20, Is = 40, R = 105)
+
+pdf("Compare_SEIR_Ref_M1_500_new.pdf", height = 4, width = 6)
+visualize_CD(CD_res1, plotLimits = PL, smooth=TRUE)
+dev.off()
+
+pdf("Compare_SEIR_Ref_M2_500_new.pdf", height = 4, width = 6)
+visualize_CD(CD_res2, plotLimits = PL, smooth=TRUE)
+dev.off()
+
+
+# plot the processes of talks
+#library(xkcd)
+#library(extrafont)
+
+talks = data.frame(x=seq(from=0,to=30,by=5),
+                   good = c(40,40,60, 60,70, 85,100),
+                   bad = c(40, 40, 65, 65, 65, 45,35))
+
+# good talk
+ggplot(data=talks, aes(x=x,y=good)) + 
+  geom_line(size=1.5, color='purple') +
+  scale_y_continuous(limits = c(20,100), breaks = NULL) +
+  annotate('text', x=3, y=50, label='intro', size=6) +
+  annotate('text', x=15, y=70, label='build-up', size=6) +
+  annotate('text', x=28, y=85, label='aha!', size=6) +
+  labs(title='A typical talk is like...', x='minutes', y='excitement')
+
+# bad talk
+ggplot(data=talks, aes(x=x,y=bad)) + 
+  geom_line(size=1.5, color='purple') +
+  scale_y_continuous(limits = c(20,100), breaks = NULL) +
+  annotate('text', x=3, y=48, label='intro', size=6) +
+  annotate('text', x=15, y=66, label='kinda\n interesting', size=6) +
+  annotate('text', x=28, y=50, label='hmm...', size=6) +
+  labs(title='Today\'s talk might be like...', x='minutes', y='excitement')
