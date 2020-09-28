@@ -716,18 +716,23 @@ colnames(X) = NULL
 # now it takes tens of seconds to parse 4654 events for N=200
 # (the pause is noticeable but not very bad...)
 
+library(doParallel)
+registerDoParallel()
+# getDoParWorkers()
+
 N = nrow(G0)
 IJ = get_ij_seq(N)
 I = IJ$I; J = IJ$J
 
-epi_tables = foreach(i=1:N, .combine = 'rbind') %do% {
+epi_tables = foreach(i=1:N, .combine = 'rbind') %dopar% {
   G0_i = G0[i,]
   summarize_epi(i, G0_i, I0, events)
 }
-net_tables = foreach(i=I, j=J, .combine = 'rbind') %do% {
+net_tables = foreach(i=I, j=J, .combine = 'rbind') %dopar% {
   G0_ij = G0[i,j]
   summarize_ij(i, j, G0_ij, I0, events, c(5,30))
 }
+## not much difference between using %do% and %dopar%, at least on my machine
 
 # compare with the previously slow way....
 # it's indeed slow as a nightmare!!
