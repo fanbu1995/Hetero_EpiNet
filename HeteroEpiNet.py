@@ -161,6 +161,7 @@ class HeteroEpiNet:
         if G0 is None and self.adjmat is None:
             G0 = nx.erdos_renyi_graph(self.N, p0)
             self.adjmat = nx.to_numpy_array(G0)
+            G0 = np.copy(self.adjmat)
         elif G0 is not None:
             self.adjmat = G0
         
@@ -306,6 +307,7 @@ class HeteroEpiNet:
 
             
             acti_rate = activation * discon_type
+            np.fill_diagonal(acti_rate, 0)
             tot_acti_rate = acti_rate.sum()/2
             
             ## 1.4 link termination
@@ -342,6 +344,7 @@ class HeteroEpiNet:
                 con_type[np.ix_(ill, ill)] = con_type[np.ix_(ill, ill)] * omega[2]
                 
             termi_rate = termination * con_type
+            np.fill_diagonal(termi_rate, 0)
             tot_termi_rate = termi_rate.sum()/2
             
             # 2. sample next event time
@@ -368,6 +371,8 @@ class HeteroEpiNet:
                 pair_probs = pair_rates/pair_rates.sum()
                 pair = choice(range(len(pair_rates)), p=pair_probs, replace=False)
                 p1, p2 = indices[0][pair], indices[1][pair] # p2 infects p1
+                
+                print('At time {}, {} gets exposed by {}, their adjmat entry is {}.'.format(t_next, p1, p2, self.adjmat[p1,p2]))
                 
                 self.epid[p1] = -1
                 
@@ -494,13 +499,13 @@ class HeteroEpiNet:
                 
                 # transform event_log into a data frame
                 event_log = pd.DataFrame(event_log)
-                return event_log
+                return event_log, G0, self.I0
                 
                 
         # transform event_log into a data frame
         event_log = pd.DataFrame(event_log)
         
-        return event_log
+        return event_log, G0, self.I0
     
     
         
@@ -544,7 +549,7 @@ class HeteroEpiNet:
 #            - "b_alpha": length-p coefficients on link activation
 #            - "b_omega": length-p coefficients on link termination 
 
-pa = {'beta': 0.3, 'eta': 0.2, 'gamma': 0.1, 
+pa = {'beta': 0.2, 'eta': 0.2, 'gamma': 0.1, 
       'phi': 0.2, 'p_s': 0.6,
       'alpha':[np.array([0.001,0.001,0.001]), np.array([0.001,0.0002,0.001])],
       'omega':[np.array([0.005,0.005,0.005]), np.array([0.005,0.05,0.005])],
@@ -554,17 +559,27 @@ pa = {'beta': 0.3, 'eta': 0.2, 'gamma': 0.1,
       'tmin': 1, 'tmax': 3}  
 
 
-N = 200
+np.random.seed(42)
 
-X = np.random.randint(1, size=(N,2))
+N = 50
+
+X = np.random.randint(2, size=(N,2))
 phase_bounds = [5,30]
 
 EpiNet = HeteroEpiNet(N, phase_bounds, X)
 
-res = EpiNet.simulate(T=100, p0=0.2, params=pa, verbose=True)          
+res, G0, I0 = EpiNet.simulate(T=50, p0=0.1, params=pa, verbose=False)          
         
-            
-            
+#%%
+# save example dataset         
+res.to_csv('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex_dat.csv',
+           index=False, index_label=False)
+
+np.savetxt('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex_G0.txt',
+           G0)
+np.savetxt('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex_X.txt',
+           X)
+
         
             
         
