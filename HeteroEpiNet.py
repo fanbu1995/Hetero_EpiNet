@@ -561,23 +561,33 @@ pa = {'beta': 0.2, 'eta': 0.2, 'gamma': 0.1,
 
 np.random.seed(42)
 
-N = 50
+# setting here!
+N = 200; p0 = 0.05
 
 X = np.random.randint(2, size=(N,2))
 phase_bounds = [5,30]
 
 EpiNet = HeteroEpiNet(N, phase_bounds, X)
 
-res, G0, I0 = EpiNet.simulate(T=50, p0=0.1, params=pa, verbose=False)          
+res, G0, I0 = EpiNet.simulate(T=50, p0=p0, params=pa, verbose=False)          
         
 #%%
 # save example dataset         
-res.to_csv('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex_dat.csv',
+#res.to_csv('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex_dat.csv',
+#           index=False, index_label=False)
+#
+#np.savetxt('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex_G0.txt',
+#           G0)
+#np.savetxt('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex_X.txt',
+#           X)
+
+
+res.to_csv('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex2_dat.csv',
            index=False, index_label=False)
 
-np.savetxt('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex_G0.txt',
+np.savetxt('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex2_G0.txt',
            G0)
-np.savetxt('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex_X.txt',
+np.savetxt('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex2_X.txt',
            X)
 
         

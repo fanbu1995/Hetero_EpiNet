@@ -306,6 +306,7 @@ colnames(G0) = NULL
 X = as.matrix(read_delim('hetero_ex_X.txt', delim=" ", col_names = FALSE))
 colnames(X) = NULL
 
+# the slow way...
 summ = summarize_events(G0, I0, events, c(5,30))
 
 # it's really, really, really slow!!!
@@ -565,9 +566,165 @@ net_tables = foreach(i=I, j=J, .combine = 'rbind') %do% {
 }
 
 
+# function to summarize epi data for person i
+summarize_epi <- function(i, G0_i, I0, events){
+  
+  # init epid vector to record disease status
+  N = length(G0_i)
+  epid = rep(0,N)
+  epid[I0] = -1 # first I0: exposed, not yet infectious!
+  
+  # neighborhood (ith row of G, the adjmat)
+  nei = G0_i
+  # make sure (i,i) entry is 0
+  G0_i[i] = 0
+
+  # data storage for 
+  # individual epidemic info
+  epi_tab = numeric(6)
+  names(epi_tab) = c("Ia_expo", "Is_expo", "Ia_ti", "Is_ti",
+                     "sick_time", "latent_time")
+  
+  # get tmax
+  tmax = max(events$time)
+  
+  # epidemic events for i (E, Ia/Is, R times)
+  events_i = events %>% filter(per1 == i, event %in% c(1,9,10,2))
+  # calculate sick time and latent time if i was ever infected
+  if(nrow(events_i)>0){
+    #expo_time = events_i$time[1]
+    
+    # get latent time
+    ill_ind = which(events_i$event %in% c(9,10))
+    if(length(ill_ind) > 0){
+      epi_tab["latent_time"] = events_i$time[ill_ind] - events_i$time[1]
+      # then get ill time
+      recov_ind = which(events_i$event==2)
+      if(length(recov_ind) > 0){
+        epi_tab['sick_time'] = events_i$time[recov_ind] - events_i$time[ill_ind]
+      }else{
+        epi_tab['sick_time'] = tmax - events_i$time[ill_ind]
+      }
+    }else{
+      epi_tab["latent_time"] = tmax - events_i$time[1]
+    }
+    
+    # set "tmax" to exposed time if ever infected...
+    tmax = events_i$time[1]
+  }
+  
+  # get all events that are related to i (both epi and net)
+  # AND all the manisfestation and recovery events (event %in% c(2,9,10))
+  # ONLY need events that are before Exposure time (if no exposure then tmax)
+  events = events %>% filter(time <= tmax) %>% 
+    filter(per1 == i | per2 == i | event %in% c(2,9,10))
+  
+  # if there is nothing, then NO exposure for i (nobody ever manisfested)
+  if(nrow(events) > 0){
+    # go through the events one by one
+    t_pre = 0
+    for(r in 1:nrow(events)){
+      z = events$event[r]
+      t_cur = events$time[r]
+      
+      # obtain cumulated time of exposure up to now
+      epi_tab['Ia_expo'] = epi_tab['Ia_expo'] + sum(nei * (epid==1)) * (t_cur - t_pre)
+      epi_tab['Is_expo'] = epi_tab['Is_expo'] + sum(nei * (epid==2)) * (t_cur - t_pre)
+      
+      # then process changes to the system
+      if (z==1){
+        # exposure
+        p1 = events$per1[r]
+        epid[p1] = -1
+        
+        # get local neighborhood at time of exposure
+        if(p1 == i){
+          epi_tab['Ia_ti'] = sum(nei * (epid==1))
+          epi_tab['Is_ti'] = sum(nei * (epid==2))
+          
+          # some info
+          cat('when ',p1,' got infected, had ', epi_tab['Ia_ti'],
+              'Ia contacts and ', epi_tab['Is_ti'], 'Is contacts.\n')
+        }
+      }else if (z %in% c(9,10)){
+        # manifestation: becoming Ia or Is
+        p1 = events$per1[r]
+        epid[p1] = ifelse(z==9, 1, 2)
+      }else if (z==2){
+        # recovery
+        p1 = events$per1[r]
+        epid[p1] = -2 # changed coding -2=R
+      }else{
+        # some edge stuff
+        p1 = events$per1[r]
+        p2 = events$per2[r]
+        
+        if(z %in% c(3:5)){
+          # reconnection
+          if(p1 == i){
+            nei[p2] = 1
+          }else if(p2 == i){
+            nei[p1] = 1
+          }
+        }else if(z %in% c(6:8)){
+          # disconnection
+          if(p1 == i){
+            nei[p2] = 0
+          }else if(p2 == i){
+            nei[p1] = 0
+          }
+        }
+      }
+      # set t_pre to t_cur
+      t_pre = t_cur
+    }
+  }
+
+  epi_tab
+}
 
 
+# try it out
+i = 23
+G0_i = G0[i,]
+(summ_i = summarize_epi(i, G0_i, I0, events))
 
+# compare with previously got results
+summ$epi_table[i,]
+# looks the same, YEAH!
+
+# try it with foreach
+# and do it together with the network events
+
+# 09/27/2020
+# do it on a bigger dataset (N=200 instead of N=50)
+## 09/21/2020
+# try it out
+events = read_csv('hetero_ex2_dat.csv')
+names(events) = c('time','event','per1','per2')
+I0 = 102 # directly pulled from Python console
+## also need to re-label people with 1-indexing (rather than 0-indexing)
+events$per1 = events$per1 + 1
+events$per2 = events$per2 + 1
+
+G0 = as.matrix(read_delim('hetero_ex2_G0.txt', delim=" ", col_names = FALSE))
+colnames(G0) = NULL
+X = as.matrix(read_delim('hetero_ex2_X.txt', delim=" ", col_names = FALSE))
+colnames(X) = NULL
+
+# let's go!!
+# now it takes seconds to parse 4654 events for N=200
+epi_tables = foreach(i=1:N, .combine = 'rbind') %do% {
+  G0_i = G0[i,]
+  summarize_epi(i, G0_i, I0, events)
+}
+net_tables = foreach(i=I, j=J, .combine = 'rbind') %do% {
+  G0_ij = G0[i,j]
+  summarize_ij(i, j, G0_ij, I0, events, c(5,30))
+}
+
+# compare with the previously slow way....
+summ2 = summarize_events(G0, I0, events, c(5,30))
 
 
 # 1.5 a function that sums up X_i and X_j given p=(i,j)
