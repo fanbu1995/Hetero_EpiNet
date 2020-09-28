@@ -713,7 +713,13 @@ X = as.matrix(read_delim('hetero_ex2_X.txt', delim=" ", col_names = FALSE))
 colnames(X) = NULL
 
 # let's go!!
-# now it takes seconds to parse 4654 events for N=200
+# now it takes tens of seconds to parse 4654 events for N=200
+# (the pause is noticeable but not very bad...)
+
+N = nrow(G0)
+IJ = get_ij_seq(N)
+I = IJ$I; J = IJ$J
+
 epi_tables = foreach(i=1:N, .combine = 'rbind') %do% {
   G0_i = G0[i,]
   summarize_epi(i, G0_i, I0, events)
@@ -724,6 +730,7 @@ net_tables = foreach(i=I, j=J, .combine = 'rbind') %do% {
 }
 
 # compare with the previously slow way....
+# it's indeed slow as a nightmare!!
 summ2 = summarize_events(G0, I0, events, c(5,30))
 
 
