@@ -2,8 +2,178 @@
 
 # utility functions for Hetero EpiNet
 
+library(dplyr)
 library(foreach)
+library(Matrix)
 registerDoParallel()
+
+# 0. to prepare stuff
+# (1) a function to generate samples from Exp(rate) truncated at (a,b)
+sam_texp <- function(n, rate, a=0, b=Inf){
+  quans = runif(n)
+  sams = -(log(exp(-rate*a)-quans*(exp(-rate*a)-exp(-rate*b))))/rate
+  return(sams)
+}
+
+# (2.1) function to get adjmat up to time point t
+get_adjmat <- function(G0, events, t){
+  adjmat = G0
+  net_events = events %>% 
+    filter(event %in% c(3:8), time < t)
+  
+  if(nrow(net_events) > 0){
+    for(r in 1:nrow(net_events)){
+      z = net_events$event[r]
+      p1 = net_events$per1[r]
+      p2 = net_events$per2[r]
+      if(z %in% c(3:5)){
+        adjmat[p1,p2] = 1
+        adjmat[p2,p1] = 1
+      }else{
+        adjmat[p1,p2] = 0
+        adjmat[p2,p1] = 0
+      }
+    }
+  }
+  
+  adjmat
+}
+
+# (2) a function to save adjmat structure at some report time points
+get_adjmat_report <- function(G0, events, times){
+  
+  adjmat = G0
+  net_events = events %>% filter(event %in% c(3:8))
+  
+  res = list()
+  
+  if(times[1]==0){
+    lb = times[1]
+    res[[as.character(lb)]] = adjmat
+  }
+  
+  if(nrow(net_events)==0){
+    for(i in c(1:length(times))){
+      lb = times[i]
+      res[[as.character(lb)]] = adjmat
+    }
+  }else{
+    t = 0; r = 1
+    for(i in c(1:length(times))){
+      lb = times[i]
+      while((t<lb) & (r <= nrow(net_events))){
+        t = net_events$time[r]
+        z = net_events$event[r]
+        p1 = net_events$per1[r]
+        p2 = net_events$per2[r]
+        
+        if(t >= lb){
+          res[[as.character(lb)]] = adjmat
+        }
+        
+        if(z %in% c(3:5)){
+          adjmat[p1,p2] = 1
+          adjmat[p2,p1] = 1
+        }else{
+          adjmat[p1,p2] = 0
+          adjmat[p2,p1] = 0
+        }
+        r = r+1
+      }
+      
+      if(t < lb){
+        res[[as.character(lb)]] = adjmat
+      }
+    }
+  }
+  
+  res
+}
+
+# try this out
+times = seq(0,56,by=7)
+G_report = get_adjmat_report(G0, events, times)
+# test out to make sure things are correct!
+for(t in times){
+  adj_t = get_adjmat(G0, events, t)
+  cat(all(adj_t == G_report[[as.character(t)]]),"\n")
+  cat(which(adj_t != G_report[[as.character(t)]], arr.ind = TRUE),'\n')
+}
+
+# events %>% filter(event %in% c(3:8), 
+#                   (per1==161 & per2==145)|(per1==145 & per2==161))
+
+
+# (3) a function to generate missing exposure &/ recovery times
+#     and produce status reports
+
+miss_data <- function(events, G0, I0, interval = 7, 
+                      miss_recov_prop = 1, miss_expo_prop = 1){
+  # `interval`: the regular period of status report
+  # `miss_recov_prop`: the proportion/probability of missing recovery times
+  # `miss_expo_prop`: the proportion/probability of missing exposure times
+  
+  N = nrow(G0)
+  epid = rep(0,N); epid[I0] = 1
+  tmax = max(events$time)
+  report.times = seq(from = 0, to = (tmax %/% interval + 1) * interval, by = interval)
+  report = epid
+  
+  # select all epi events
+  # events.epi = events[events$event %in% c(1,2),]
+  
+  recov.ind = NULL
+  expo.ind = NULL
+  for(ix in c(2:length(report.times))){
+    lb = report.times[ix-1]; ub = report.times[ix]
+    st = min(which(events$time > lb)); en = max(which(events$time <= ub))
+    if(st == Inf){ break }
+    for(r in st:en){
+      z = events$event[r]
+      p = events$per1[r]
+      if(z==1){
+        # exposure
+        epid[p] = -1
+        expo.ind = c(expo.ind, r)
+      }else if(z==2){
+        # recovery
+        epid[p] = -2
+        recov.ind = c(recov.ind, r)
+      }else if(z %in% c(9,10)){
+        # manifestation
+        epid[p] = ifelse(z==9, 1, 2)
+      }
+    }
+    # status report
+    report = rbind(report, epid)
+  }
+  
+  # records to remove in recovery times and exposure times
+  remove_recov = as.logical(rbinom(length(recov.ind), 1, miss_recov_prop))
+  remove_expo = as.logical(rbinom(length(expo.ind), 1, miss_expo_prop))
+  to_remove = c(recov.ind[remove_recov], expo.ind[remove_expo])
+  events = events[-to_remove,]
+  
+  # return new dataset and status report
+  row.names(report) = as.character(report.times)
+  
+  # if("truth" %in% names(dat)){
+  #   return(list(G0=G0, I0=I0, report.times=report.times, 
+  #               events=events, report = report, 
+  #               truth = dat$truth))
+  # }else{
+  #   cat("True parameters unavailable for this dataset!\n")
+  #   return(list(G0=G0, I0=I0, report.times=report.times, 
+  #               events=events, report = report))
+  # }
+  
+  list(G0=G0, I0=I0, report.times=report.times, 
+       events=events, report = report)
+}
+
+# try this
+miss_dat = miss_data(events, G0, I0)
+
 
 # I. for MLEs
 
@@ -19,7 +189,7 @@ summarize_epi <- function(i, G0_i, I0, events){
   # neighborhood (ith row of G, the adjmat)
   nei = G0_i
   # make sure (i,i) entry is 0
-  G0_i[i] = 0
+  nei[i] = 0
   
   # data storage for 
   # individual epidemic info
@@ -351,33 +521,48 @@ get_ij_seq <- function(N){
 # (1) missing recovery time
 
 # i) given exposure times etc., get the local neighborhood of person i
-#    at time t^E
+#    at time t^E:
 #    a vector of Ia people, and a vector of Is people
 
 # this function: need to make sure i has manifested!! (had event 9 or 10)
-# ALSO: assume the events contain recovery events (and sorted by time)
-get_nei_expo_i <- function(i, expo_time, G0_i, I0, events){
+get_nei_expo_i <- function(i, expo_time, G_i, events, report, times){
+  # expo_time: the exposure time of i
+  # all adjmats at beginning points of the intervals 
+  # report: the matrix of everyone's status at each report point
+  # times: the report time points
+  
+  # the left endpoint of interval that contains expo_time
+  lb = max(times[times <= expo_time])
+  ix = max(which(times <= expo_time))
+  
+  cat('lower bound for expo time', expo_time, 'is', lb,'\n')
+
   # init epid vector to record disease status
-  N = length(G0_i)
-  epid = rep(0,N)
-  epid[I0] = -1 # first I0: exposed, not yet infectious!
+  # only need to start from the LB of the interval for new manifestation events
+  #G_i = G_all[[as.character(lb)]][i,]
+  N = length(G_i)
+  epid = report[ix,]
+  #epid[I0] = -1 # first I0: exposed, not yet infectious!
   
   # neighborhood (ith row of G, the adjmat)
-  nei = G0_i
+  nei = G_i
   # make sure (i,i) entry is 0
   nei[i] = 0
   
   # storage vectors for Ia and Is people
-  Ia = NULL
-  Is = NULL
+  # Ia = NULL
+  # Is = NULL
   
   # get events up to expo_time:
   # get all events that are related to i (both epi and net)
-  # AND all the manisfestation and recovery events (event %in% c(2,9,10))
-  events = events %>% filter(time <= expo_time) %>%
-    filter(per1 == i | per2 == i | event %in% c(2,9,10))
+  # AND all the manisfestation events (event %in% c(9,10))
+  # ONLY deal with events after lb (start point of the interval)
+  events = events %>% 
+    filter(time <= expo_time & time >= lb) %>%
+    filter(per1 == i | per2 == i | event %in% c(9,10))
   
-  # if there is nothing, then NO exposure for i (nobody ever manisfested)
+  # if there is nothing, then NO new 
+  # activity related to i from lb to expo_time
   if(nrow(events) > 0){
     # go through the events one by one
     t_pre = 0
@@ -388,12 +573,9 @@ get_nei_expo_i <- function(i, expo_time, G0_i, I0, events){
       # then process changes to the system
       if (z %in% c(9,10)){
         # manifestation: becoming Ia or Is
+        # only deal with new infections after lb
         p1 = events$per1[r]
         epid[p1] = ifelse(z==9, 1, 2)
-      }else if(z==2){
-        # recovery
-        p1 = events$per1[r]
-        epid[p1] = -2 # changed coding -2=R
       }else{
         # some edge stuff
         p1 = events$per1[r]
@@ -419,24 +601,31 @@ get_nei_expo_i <- function(i, expo_time, G0_i, I0, events){
       t_pre = t_cur
     }
     
-    Ia = which(nei * (epid==1) == 1)
-    Is = which(nei * (epid==2) == 1)
   }
-    
-    list(Ia = Ia, Is = Is)
+  
+  Ia = which(nei * (epid==1) == 1)
+  Is = which(nei * (epid==2) == 1)
+  
+  list(Ia = Ia, Is = Is)
 }
 
 # ii) get the neiborhood for all people who were ever infectious
-get_nei_expo_all <- function(G0, I0, events, expo_times){
+get_nei_expo_all <- function(G_all, events, expo_times, report, times){
   # expo_times: a list of
   ## exposed: ids of all people who need exposure time imputation
   ## times: currently imputed exposure times
   exposed = expo_times$exposed
   M = ifelse(length(exposed) > 100, length(exposed), 100)
   res = foreach(i=exposed, .combine = 'list', .maxcombine = M) %dopar% {
-    G0_i = G0[i,]
+    
     expo_time = expo_times$times[exposed == i]
-    get_nei_expo_i(i, expo_time, G0_i, I0, events)
+    
+    # the left endpoint of interval that contains expo_time
+    lb = max(times[times <= expo_time])
+    # get i's local adjmat at lb
+    G_i = G_all[[as.character(lb)]][i,]
+
+    get_nei_expo_i(i, expo_time, G_i, events, report, times)
   }
   names(res) = sapply(exposed, as.character)
   res
@@ -448,7 +637,7 @@ get_nei_expo_all <- function(G0, I0, events, expo_times){
 setwd('~/Documents/Research_and_References/Hetero_EpiNet_2020/')
 events = read_csv('hetero_ex2_dat.csv')
 names(events) = c('time','event','per1','per2')
-I0 = 102 # directly pulled from Python console
+I0 = 103 # directly pulled from Python console
 ## also need to re-label people with 1-indexing (rather than 0-indexing)
 events$per1 = events$per1 + 1
 events$per2 = events$per2 + 1
@@ -459,17 +648,327 @@ X = as.matrix(read_delim('hetero_ex2_X.txt', delim=" ", col_names = FALSE))
 colnames(X) = NULL
 
 # get an `exposure_times` list
-exposure_times = events %>% filter(event == 1) %>% 
-  mutate(exposed = per1, times = time) %>%
-  select(exposed, times) %>% as.list()
+# exposure_times = events %>% filter(event == 1) %>% 
+#   mutate(exposed = per1, times = time) %>%
+#   select(exposed, times) %>% as.list()
 
 # try the `get_nei_expo_all` function
-infec_nei = get_nei_expo_all(G0, I0, events, exposure_times)
+infec_nei = get_nei_expo_all(G_report, events, exposure_times, 
+                             miss_dat$report, miss_dat$report.times)
 
-st = Sys.time()
-for(j in 1:200){
-  infec_nei = get_nei_expo_all(G0, I0, events, exposure_times)
-  cat(j,'\r')
+# check out a few to see if their real infector is in the set
+events %>% filter(event==1, per1 %in% c(124,28,172))
+
+# compare it with epi_tables to validate
+# sanity check: potential infector set should be larger than real infector set!
+exposed = exposure_times$exposed
+for(e in exposed){
+  Ia_ti = epi_tables[e,'Ia_ti']
+  Is_ti = epi_tables[e,'Is_ti']
+  size_a = length(infec_nei[as.character(e)]$Ia)
+  size_s = length(infec_nei[as.character(e)]$Is)
+  cat('Person',e,'Ia size:', Ia_ti>=size_a, 'Is size:', Is_ti >=size_s,'\n')
 }
-diff = Sys.time() - st
-cat('Time taken:',diff,'\n')
+
+# benchmark it...
+# st = Sys.time()
+# for(j in 1:200){
+#   infec_nei = get_nei_expo_all(G0, I0, events, exposure_times)
+#   cat(j,'\r')
+# }
+# diff = Sys.time() - st
+# cat('Time taken:',diff,'\n')
+# 100 times take about 1 minute... (not super bad)
+
+
+# iii) DARCI+: lower bound update is not uniform, adapted from before
+propose_recov_filter <- function(lb, ub, recovers, exposure_times, nei_infec, 
+                                 gam=0.2, exp_eta=1.5){
+  
+  # [lb, ub]: the time interval to impute recovery times on
+  # recovers: ids of people to impute recovery times for
+  # nei_infec: the list of Ia and Is neighbors at time of exposure for each person
+  # exposure_times: a list of
+  ## exposed: ids of all people who need exposure time imputation
+  ## times: currently imputed exposure times
+  # gam: currect value of gamma
+  # exp_eta: current value of exp(eta)
+  
+  # pull up infection log in this interval 
+  events.infec = as.data.frame(exposure_times) %>% 
+    select(per1 = exposed, time = times) %>%
+    filter(time > lb & time <= ub) %>%
+    arrange(time)
+  
+  # if events.infec non-empty:
+  # obtain adjusted feasible sampling lower bounds for each person in `recovers`
+  # if about-to-recover people are the only sick neighbors of someone infected at t, 
+  # then randomly select one of them to mandately recover after t
+  # according to the prob. in manuscript
+  bounds = rep(lb, length(recovers))
+  
+  if(nrow(events.infec) > 0){
+    for(r in 1:nrow(events.infec)){
+      p1 = events.infec$per1[r]
+      if(p1 %in% recovers){
+        t = events.infec$time[r]
+        bounds[recovers==p1] = max(bounds[recovers==p1],t)
+      }
+      nei_s = nei_infec[[as.character(p1)]]$Is; size_s = length(nei_s)
+      nei_a = nei_infec[[as.character(p1)]]$Ia; size_a = length(nei_a)
+      nei = c(nei_s, nei_a)
+      poi = recovers[recovers %in% nei]
+      if(length(poi)==length(nei)){
+        #cat("POIs for individual",p1,":\n",poi,"\n")
+        t = events.infec$time[r]
+        if(size_s == 0 | size_a == 0){
+          # one of Ia/Is is empty set
+          poi = nei
+        }else{
+          # both are non-empty
+          # then choose with `exp_eta` factored in
+          wset = sample(1:2, 1, prob = c(size_a, size_s * exp_eta))
+          if(wset == 1){
+            poi = nei_a
+          }else{
+            poi = nei_s
+          }
+        }
+        if(length(poi)==1){
+          p = poi
+        }else{
+          p = sample(poi, 1)
+        }
+        bounds[recovers==p] = max(bounds[recovers==p],t)
+      }
+    }
+  }
+  
+  # sample recovery times under the adjusted bounds
+  cands = sam_texp(length(recovers), gam, bounds-lb, ub-lb) + lb
+  
+  # cat("Interval: [",lb,",",ub,"]\n")
+  # cat("To recover:",recovers,"\n")
+  # cat("Feasible lower bounds:\n",bounds,"\n")
+  # cat("Proposed recovery times:\n",cands,"\n")
+  
+  cands
+}
+
+## try this out
+# seems to work!
+# LB = 28; UB = 35
+# recovs = events %>% filter(time > LB & time <= UB, event==2) %>%
+#   select(per1) %>% pull()
+# cands = propose_recov_filter(LB, UB, recovs, exposure_times, infec_nei)
+
+
+# (2) missing exposure time
+
+# get a list of recovers - times
+recovery_times = events %>% filter(event==2) %>% 
+  select(recov=per1, time)
+
+# i) a function to combine two data frames and sort by time
+# df_combine <- function(event1, event2){
+#   n1 = nrow(event1)
+#   n2 = nrow(event2)
+#   if(n1 == 0){
+#     event2
+#   }else if(n2 == 0){
+#     event1
+#   }else{
+#     n = n1 + n2
+#     df = NULL
+#     i = 1; j = 1
+#     times1 = event1$time
+#     times2 = event2$time
+#     for(k in 1:n){
+#       if(times1[i] < times2[j]){
+#         df = rbind(df, )
+#       }
+#     }
+#   }
+# }
+
+# ii) for each person i, get risk function change points and values
+#    on interval [expo_time-t_max, expo_time-t_min]
+#    given current recovery times and exp_eta
+
+get_expo_risk_i <- function(i, t_i, G_all, tmax, tmin, report, times,
+                            events, recovery_times, exp_eta=1.5){
+  # t_i: manifestation time of i
+  # G_all: all adjmats at report times
+  # recovery_times: a sorted-by-time data frame of imputed recovery times (currently)
+  
+  st = max(0,t_i - tmax)
+  en = ifelse(t_i - tmin <= 0, t_i, t_i - tmin)
+  # the end of interval is set to t_i instead if t_i - tmin <= 0
+  
+  # the left endpoint of interval that contains st
+  lb = max(times[times <= st])
+  ix = max(which(times <= st))
+  
+  # init epid vector to record disease status
+  # only need to start from the LB of the interval for new manifestation events
+  G_i = G_all[[as.character(lb)]][i,]
+  nei = G_i
+  nei[i] = 0
+  epid = report[ix,]
+  
+  #cat('length of nei:', length(nei), "length of epid", length(epid),'\n')
+  
+  # filter events related to i
+  # AND all the manifestation events!!
+  events = events %>% filter(time >= lb & time <= en) %>% 
+    filter(per1 == i | per2 == i | event %in% c(9,10))
+  
+  recovered_before_st = recovery_times %>%
+    filter(time >= lb & time <= st) %>%
+    select(recov) %>% pull()
+  
+  # recovery_times = recovery_times %>% 
+  #   filter(time > st & time <= en) %>%
+  #   select(time=times, per1=recov)
+  
+  recovery_times = recovery_times %>% 
+    filter(time > st & time <= en) %>%
+    mutate(event=2, per2 = NA) %>%
+    select(time, event, per1=recov, per2)
+  
+  # combine events with recovery_times
+  events = rbind(events, recovery_times) %>% 
+    arrange(time)
+  
+  # get the G_i and epid at the time of st
+  t = lb
+  r = 1
+  if(st > lb){
+    while((t < st) & (r <= nrow(events))){
+      t = events$time[r]
+      z = events$event[r]
+      p1 = events$per1[r]
+      p2 = events$per2[r]
+      if(t >= st){
+        break
+      }
+      if(z %in% c(3:5)){
+        # reconnection
+        if(p1 == i){
+          nei[p2] = 1
+        }else if(p2 == i){
+          nei[p1] = 1
+        }
+      }else if (z %in% c(6:8)){
+        # disconnection
+        if(p1 == i){
+          nei[p2] = 0
+        }else if(p2 == i){
+          nei[p1] = 0
+        }
+      }else if (z %in% c(9,10)){
+        epid[p1] = ifelse(z==9, 1, 2)
+      }
+      r = r+1
+    }
+    
+    # finally account for those who recovered in [lb,st]
+    epid[recovered_before_st] = -2
+    
+  }
+  
+  # now go from st to en and register all changes
+  change_times = st
+  risk_val = NULL
+  
+  # if already exhausted events
+  if(r==nrow(events)){
+    change_times = c(change_time, en)
+    risk_val = sum(nei * (epid==1)) + sum(nei * (epid==2)) * exp_eta
+  }else{
+    prev_risk = sum(nei * (epid==1)) + sum(nei * (epid==2)) * exp_eta
+    for(k in r:nrow(events)){
+      t = events$time[k]
+      z = events$event[k]
+      p1 = events$per1[k]
+      p2 = events$per2[k]
+      
+      if(z %in% c(3:5)){
+        # reconnection
+        poi = ifelse(p1==i, p2, p1)
+        nei[poi] = 1
+        # if this person is Is or Ia: register change point
+        if(epid[poi] %in% c(1,2)){
+          risk_val = c(risk_val, prev_risk)
+          change_times = c(change_times, t)
+          prev_risk = sum(nei * (epid==1)) + sum(nei * (epid==2)) * exp_eta 
+        }
+      }else if (z %in% c(6:8)){
+        # disconnection
+        poi = ifelse(p1==i, p2, p1)
+        nei[poi] = 0
+        # if this person is Is or Ia: register change point
+        if(epid[poi] %in% c(1,2)){
+          risk_val = c(risk_val, prev_risk)
+          change_times = c(change_times, t)
+          prev_risk = sum(nei * (epid==1)) + sum(nei * (epid==2)) * exp_eta 
+        }
+      }else if (z %in% c(9,10)){
+        # manifestation
+        epid[p1] = ifelse(z==9, 1, 2)
+        # if p1 is connected to i
+        if(nei[p1] == 1){
+          risk_val = c(risk_val, prev_risk)
+          change_times = c(change_times, t)
+          prev_risk = sum(nei * (epid==1)) + sum(nei * (epid==2)) * exp_eta 
+        }
+      }else if (z == 2){
+        # recovery
+        epid[p1] = -2
+        # if p1 is connected to i
+        if(nei[p1] == 1){
+          risk_val = c(risk_val, prev_risk)
+          change_times = c(change_times, t)
+          prev_risk = sum(nei * (epid==1)) + sum(nei * (epid==2)) * exp_eta 
+        }
+      }
+    }
+    
+    risk_val = c(risk_val, prev_risk)
+    change_times = c(change_times, en)
+  }
+  
+  # get the lengths of constant-risk intervals
+  # compute relative risk
+  # and sample a time according to the probs
+  lens = diff(change_times)
+  nL = length(lens)
+  if(nL == 1){
+    res = runif(1, min=st, max=en)
+  }else{
+    weights = lens * risk_val
+    A = sample(nL, 1, prob = weights)
+    res = runif(1, min=change_times[A], max=change_times[A+1])
+  }
+  
+  # return the sampled exposure time
+  list(changes = change_times, lengths = lens, risks = risk_val, samp = res)
+}
+
+# try it out
+i = 23
+t_i = events %>% filter(event %in% c(9,10), per1==i) %>% 
+  select(time) %>% pull()
+er_i = get_expo_risk_i(i,t_i, G_report, tmax=7, tmin=1,
+                       miss_dat$report, miss_dat$report.times, miss_dat$events,
+                       recovery_times)
+
+i = 77 # problem with this one!! --> probably fixed!
+t_i = events %>% filter(event %in% c(9,10), per1==i) %>% 
+  select(time) %>% pull()
+er_i = get_expo_risk_i(i,t_i, G_report, tmax=7, tmin=0,
+                       miss_dat$report, miss_dat$report.times, miss_dat$events,
+                       recovery_times)
+events %>% filter(event ==1 , per1==i)
+events %>% filter(event %in% c(9,10), per1==65) # 17.8
+
