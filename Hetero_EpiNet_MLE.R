@@ -798,6 +798,9 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1){
     # 2.1 estimate b_S
     Expo = (epi_table$Ia_expo + eta * epi_table$Is_expo) * beta
     has_expo = which(Expo > 0)
+    ## set Y_infec to the original thing before re-subsetting
+    Y_infec = (epi_table$latent_time > 0) %>% as.numeric()
+    Y_infec[I0] = 0
     Y_infec = Y_infec[has_expo]
     X_infec = X[has_expo,]
     Expo = Expo[has_expo]
@@ -814,9 +817,10 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1){
       beta * sum(indiv_effects * (epi_table$Ia_expo + eta * epi_table$Is_expo)[has_expo]) -
         sum(log((epi_table$Ia_ti + epi_table$Is_ti * eta)[got_infected]))
     }
-    llgrr = function(beka){
-      eta * beta * sum(indiv_effects * epi_table$Is_expo[has_expo]) -
-        eta * sum(epi_table$Is_ti[got_infected]/(epi_table$Ia_ti + epi_table$Is_ti * eta)[got_infected])
+    ## 10/18/2020: de-bugged - previously this was not correct
+    llgrr = function(eta){
+      beta * sum(indiv_effects * epi_table$Is_expo[has_expo]) -
+        sum(epi_table$Is_ti[got_infected]/(epi_table$Ia_ti + epi_table$Is_ti * eta)[got_infected])
     }
     eta_old = eta
     
@@ -828,7 +832,7 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1){
                 method = "L-BFGS-B", lower = 1e-6, upper = Inf)$par
     
     # 2.4 if difference < tol, stop
-    if(abs(beta_old - beta) < tol | abs(eta_old - eta) < tol){
+    if(abs(beta_old - beta) < tol & abs(eta_old - eta) < tol){
       break
     }
     

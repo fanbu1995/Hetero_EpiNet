@@ -17,27 +17,30 @@ from copy import copy
 
 import pandas as pd
 
+import os
+
 #%%
 # try out manipulating design matrix X into XX with (i,j) entry being Xi + Xj
-X = np.random.randn(10,2)
+if __name__ == '__main__':
+    X = np.random.randn(10,2)
 
-#mani = np.zeros((2,10))
-#mani[0,:] = np.ones(10)
+    #mani = np.zeros((2,10))
+    #mani[0,:] = np.ones(10)
 
-mani = np.zeros((10,2,2))
-for j in range(10):
-    mani[j,:,:] = np.eye(2)
-
-XX = X.dot(mani)    
-XXT = np.transpose(XX,(1,0,2))
-
-Xsum = XX + XXT
-
-for i in range(10):
+    mani = np.zeros((10,2,2))
     for j in range(10):
-        print(Xsum[i,j,0] == X[i,0]+X[j,0])
+        mani[j,:,:] = np.eye(2)
+
+    XX = X.dot(mani)    
+    XXT = np.transpose(XX,(1,0,2))
+
+    Xsum = XX + XXT
+
+    for i in range(10):
+        for j in range(10):
+            print(Xsum[i,j,0] == X[i,0]+X[j,0])
         
-Xsum.dot([1,-1]).shape
+        Xsum.dot([1,-1]).shape
 
 #%%
 # a function to conduct the manipulation above
@@ -372,7 +375,8 @@ class HeteroEpiNet:
                 pair = choice(range(len(pair_rates)), p=pair_probs, replace=False)
                 p1, p2 = indices[0][pair], indices[1][pair] # p2 infects p1
                 
-                print('At time {}, {} gets exposed by {}, their adjmat entry is {}.'.format(t_next, p1, p2, self.adjmat[p1,p2]))
+                if verbose:
+                    print('At time {}, {} gets exposed by {}, their adjmat entry is {}.'.format(t_next, p1, p2, self.adjmat[p1,p2]))
                 
                 self.epid[p1] = -1
                 
@@ -548,28 +552,30 @@ class HeteroEpiNet:
 #            - "b_S": length-p coefficients on susceptibility
 #            - "b_alpha": length-p coefficients on link activation
 #            - "b_omega": length-p coefficients on link termination 
+        
+if __name__ == '__main__':
+    
 
-pa = {'beta': 0.2, 'eta': 0.2, 'gamma': 0.1, 
+    pa = {'beta': 0.2, 'eta': 0.2, 'gamma': 0.1, 
       'phi': 0.2, 'p_s': 0.6,
       'alpha':[np.array([0.001,0.001,0.001]), np.array([0.001,0.0002,0.001])],
       'omega':[np.array([0.005,0.005,0.005]), np.array([0.005,0.05,0.005])],
       'b_S': np.array([0,-1]),
       'b_alpha': np.array([1,0]),
-      'b_omega': np.array([1,-1]),
-      'tmin': 1, 'tmax': 3}  
+      'b_omega': np.array([1,-1])}  
 
 
-np.random.seed(42)
+    np.random.seed(67)
 
-# setting here!
-N = 200; p0 = 0.05
+    # setting here!
+    N = 200; p0 = 0.05
 
-X = np.random.randint(2, size=(N,2))
-phase_bounds = [5,30]
+    X = np.random.randint(2, size=(N,2))
+    phase_bounds = [5,30]
 
-EpiNet = HeteroEpiNet(N, phase_bounds, X)
+    EpiNet = HeteroEpiNet(N, phase_bounds, X)
 
-res, G0, I0 = EpiNet.simulate(T=50, p0=p0, params=pa, verbose=False)          
+    res, G0, I0 = EpiNet.simulate(T=50, p0=p0, params=pa, verbose=False)          
         
 #%%
 # save example dataset         
@@ -582,13 +588,99 @@ res, G0, I0 = EpiNet.simulate(T=50, p0=p0, params=pa, verbose=False)
 #           X)
 
 
-res.to_csv('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex2_dat.csv',
-           index=False, index_label=False)
+if __name__ == '__main__':
 
-np.savetxt('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex2_G0.txt',
-           G0)
-np.savetxt('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex2_X.txt',
-           X)
+    res.to_csv('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex2_dat.csv',
+               index=False, index_label=False)
+
+    np.savetxt('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex2_G0.txt',
+               G0)
+    np.savetxt('/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_ex2_X.txt',
+               X)
+    
+#%%
+# a function to generate full simulation data, save all info to a specified directory for R use
+    
+def simulateData(params, N, p0, T, phase_bounds, Xp = 2, 
+                 savepath='/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/', dirname = 'ex1',
+                 seed=42):
+    '''
+    params: should be dictionary of parameters
+    N: pop size
+    p0: initial net density
+    T: Tmax
+    phase_bounds: st and en of phase change points
+    Xp: dimensionality of covariate matrix X (only take values in 0 and 1); default 2
+    savepath: the root dir of saving things
+    dirname: the folder name of this simulation's files
+    '''
+    
+    np.random.seed(seed)
+
+    # generate X matrix
+    X = np.random.randint(2, size=(N,Xp))
+    
+    # initialize object
+    EpiNet = HeteroEpiNet(N, phase_bounds, X)
+
+    # get simulation results
+    res, G0, I0 = EpiNet.simulate(T=T, p0=p0, params=params, verbose=False)   
+    
+    # create the data dir
+    des = os.path.join(savepath, dirname)
+    if not os.path.exists(des):
+        os.makedirs(des)
+        
+    # save results
+    res.to_csv(os.path.join(des,'dat.csv'),index=False, index_label=False)
+    np.savetxt(os.path.join(des,'G0.txt'),G0)
+    np.savetxt(os.path.join(des,'X.txt'),X)
+    
+    # save settings too
+    net_params = dict()
+    net_params['alpha'] = np.array(params['alpha']).reshape(6)
+    net_params['omega'] = np.array(params['omega']).reshape(6)
+    
+    net_p = pd.DataFrame(net_params)
+    net_p.to_csv(os.path.join(des,'net_params.csv'),index=False, index_label=False)
+    
+    # also the b's (regression)
+    regr_params = dict()
+    regr_params['b_S'] = params['b_S']
+    regr_params['b_alpha'] = params['b_alpha']
+    regr_params['b_omega'] = params['b_omega']
+    
+    regr_p = pd.DataFrame(regr_params)
+    regr_p.to_csv(os.path.join(des,'regr_params.csv'),index=False, index_label=False)
+    
+    # avoid modifying the params dictionary - in case bad things happen
+    pa = copy(params)
+    pa.pop('alpha'); pa.pop('omega');
+    pa.pop('b_S'); pa.pop('b_alpha'); pa.pop('b_omega')
+    pa['I0'] = I0[0]
+    pa['stage_change'] = phase_bounds
+    
+    pa = pd.DataFrame(pa)
+    pa.to_csv(os.path.join(des,'params.csv'),index=False, index_label=False)
+    
+    print('Simulation done and info saved! I0 is',I0)
+    return
+    
+# try it out
+if __name__ == '__main__':
+    pa = {'beta': 0.2, 'eta': 0.2, 'gamma': 0.1, 
+      'phi': 0.2, 'p_s': 0.6,
+      'alpha':[np.array([0.0006,0.0006,0.0006]), np.array([0.0006,0.0002,0.0006])],
+      'omega':[np.array([0.005,0.005,0.005]), np.array([0.005,0.05,0.005])],
+      'b_S': np.array([0,-1]),
+      'b_alpha': np.array([1,0]),
+      'b_omega': np.array([1,-1])}
+    
+    simulateData(pa, 200, 0.05, 50, [5,30], Xp = 2, 
+                 savepath='/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/', dirname = 'ex1',
+                 seed=83)
+    
+    
 
         
             

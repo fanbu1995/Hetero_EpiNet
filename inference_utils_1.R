@@ -39,7 +39,7 @@ get_adjmat <- function(G0, events, t){
   adjmat
 }
 
-# (2) a function to save adjmat structure at some report time points
+# (2.2) a function to save adjmat structure at some report time points
 get_adjmat_report <- function(G0, events, times){
   
   adjmat = G0
@@ -90,15 +90,15 @@ get_adjmat_report <- function(G0, events, times){
   res
 }
 
-# try this out
-times = seq(0,56,by=7)
-G_report = get_adjmat_report(G0, events, times)
-# test out to make sure things are correct!
-for(t in times){
-  adj_t = get_adjmat(G0, events, t)
-  cat(all(adj_t == G_report[[as.character(t)]]),"\n")
-  cat(which(adj_t != G_report[[as.character(t)]], arr.ind = TRUE),'\n')
-}
+# # try this out
+# times = seq(0,56,by=7)
+# G_report = get_adjmat_report(G0, events, times)
+# # test out to make sure things are correct!
+# for(t in times){
+#   adj_t = get_adjmat(G0, events, t)
+#   cat(all(adj_t == G_report[[as.character(t)]]),"\n")
+#   cat(which(adj_t != G_report[[as.character(t)]], arr.ind = TRUE),'\n')
+# }
 
 # events %>% filter(event %in% c(3:8), 
 #                   (per1==161 & per2==145)|(per1==145 & per2==161))
@@ -114,7 +114,8 @@ miss_data <- function(events, G0, I0, interval = 7,
   # `miss_expo_prop`: the proportion/probability of missing exposure times
   
   N = nrow(G0)
-  epid = rep(0,N); epid[I0] = 1
+  ## 10/19/2020: epid[I0] should be -1 (E)
+  epid = rep(0,N); epid[I0] = -1
   tmax = max(events$time)
   report.times = seq(from = 0, to = (tmax %/% interval + 1) * interval, by = interval)
   report = epid
@@ -171,10 +172,65 @@ miss_data <- function(events, G0, I0, interval = 7,
        events=events, report = report)
 }
 
-# try this
-miss_dat = miss_data(events, G0, I0)
+# # try this
+# miss_dat = miss_data(events, G0, I0)
 
 
+# (4) a function to read in simulated data (generated in Python)
+load_data <- function(root, dirname){
+  # root: has to be the full path
+  # dirname: the folder name
+  
+  #fpath = paste0(root,dirname)
+  fpath = file.path(root,dirname)
+  
+  # events
+  events = read_csv(file.path(fpath,'dat.csv'))
+  names(events) = c('time','event','per1','per2')
+  ## need to re-label people with 1-indexing (rather than 0-indexing)
+  events$per1 = events$per1 + 1
+  events$per2 = events$per2 + 1
+  
+  # G0 and X
+  G0 = as.matrix(read_delim(file.path(fpath,'G0.txt'), delim=" ", col_names = FALSE))
+  colnames(G0) = NULL
+  ## use parse matrix to save some space
+  G0 = as(G0, "dgTMatrix")
+  X = as.matrix(read_delim(file.path(fpath,'X.txt'), delim=" ", col_names = FALSE))
+  colnames(X) = NULL
+  
+  # the params, I0 and change_times
+  params = read_csv(file.path(fpath,'params.csv'))
+  I0 = params$I0[1] + 1 # need to add 1 too
+  stage_change = params$stage_change
+  
+  # also record exp(eta)
+  truth = list(beta = params$beta[1], eta = params$eta[1], exp_eta = exp(params$eta[1]),
+               gamma = params$gamma[1], phi = params$phi[1], p_s = params$p_s[1])
+  
+  # the network params
+  net_params = read_csv(file.path(fpath,'net_params.csv'))
+  truth$alpha = net_params$alpha
+  truth$omega = net_params$omega
+  
+  # the regression coefficients
+  regr_params = read_csv(file.path(fpath,'regr_params.csv'))
+  truth$b_S = regr_params$b_S
+  truth$b_alpha = regr_params$b_alpha
+  truth$b_omega = regr_params$b_omega
+  
+  # put everything together
+  dat = list(events = events, G0 = G0, I0 = I0, stage_change = stage_change, 
+             X = X, truth = truth)
+  
+  dat
+}
+
+## try this out
+# dat = load_data('~/Documents/Research_and_References/Hetero_EpiNet_2020/', 'ex1')
+
+
+#####
 # I. for MLEs
 
 # (1) summarize epi table for each person i
@@ -320,6 +376,8 @@ get_sub_type <- function(epid){
 }
 
 # function to process info for i,j pairs
+# UPDATE 10/18/2020: also keep track of C and D counts (to sum up later on)
+# output length: 7 + 7 + 6 + 6
 summarize_ij <- function(i,j, G0_ij, I0, events, stage_change){
   # tmax
   tmax = max(events$time)
@@ -330,6 +388,13 @@ summarize_ij <- function(i,j, G0_ij, I0, events, stage_change){
   
   # get st and en of NPI period
   st = stage_change[1]; en = stage_change[2]
+  
+  # storage for C and D counts
+  c_counts = rep(0,6)
+  d_counts = rep(0,6)
+  type_phase = c('HH0','HI0','II0','HH1','HI1','II1')
+  names(c_counts) = type_phase
+  names(d_counts) = type_phase
   
   # if there is no event related to i or j...
   # i,j have stayed H
@@ -372,7 +437,6 @@ summarize_ij <- function(i,j, G0_ij, I0, events, stage_change){
     for(r in 1:nrow(events)){
       
       # output something
-      
       #print(c_ij)
       #print(d_ij)
       
@@ -460,10 +524,26 @@ summarize_ij <- function(i,j, G0_ij, I0, events, stage_change){
         # connection
         G_ij = 1
         c_ij[1] = c_ij[1] + 1
+        # also update c_count
+        if(t_cur < st | t_cur > en){
+          # operate under T0
+          c_counts[1:3] = c_counts[1:3] + link_type
+        }else{
+          # operate under T1
+          c_counts[4:6] = c_counts[4:6] + link_type
+        }
       }else if(z %in% c(6:8)){
         # disconnection
         G_ij = 0
         d_ij[1] = d_ij[1] + 1
+        # also update d_count
+        if(t_cur < st | t_cur > en){
+          # operate under T0
+          d_counts[1:3] = d_counts[1:3] + link_type
+        }else{
+          # operate under T1
+          d_counts[4:6] = d_counts[4:6] + link_type
+        }
       }
       
       t_pre = t_cur
@@ -482,17 +562,19 @@ summarize_ij <- function(i,j, G0_ij, I0, events, stage_change){
   }
   
   # return as a longgg vector
-  c(c_ij, d_ij)
+  # UPDATE 10/18/2020: extend this with the c_count and d_count vectors as well
+  # length: 7 + 7 + 6 + 6
+  c(c_ij, d_ij, c_counts, d_counts)
 }
 
 # # try it out
-# # i=39,j=43
+# i=39,j=43
 # i=37;j=39
 # G0_ij = G0[i,j]
 # summ_ij = summarize_ij(i, j, G0_ij, I0, events, c(5,30))
 # summ_ij
 # 
-# # check it against "ground truth"
+# check it against "ground truth"
 # summ$net_c_table[get_vec_index(c(i,j),N),]
 # summ$net_d_table[get_vec_index(c(i,j),N),]
 
@@ -516,6 +598,271 @@ get_ij_seq <- function(N){
 }
 
 
+# (3) everything together: function to obtain summary statistics/tables
+summarize_events2 <- function(G0, I0, events, stage_change){
+  
+  # get basics
+  N = nrow(G0)
+  
+  # get event counts
+  nE = sum(events$event==1)
+  nR = sum(events$event==2)
+  nIa = sum(events$event==9)
+  nIs = sum(events$event==10)
+  #nI = nIa + nIs
+  
+  # get st and en of NPI period
+  st = stage_change[1]; en = stage_change[2]
+  
+  # separate two stages
+  events_T0 = events %>% filter(time <= st | time >= en)
+  events_T1 = events %>% filter(time > st & time < en)
+  
+  # obtain epi table
+  epi_tables = foreach(i=1:N, .combine = 'rbind') %dopar% {
+    G0_i = G0[i,]
+    summarize_epi(i, G0_i, I0, events)
+  }
+  
+  # obtain net tables
+  IJ = get_ij_seq(N)
+  I = IJ$I; J = IJ$J
+  net_tables = foreach(i=I, j=J, .combine = 'rbind') %dopar% {
+    G0_ij = G0[i,j]
+    summarize_ij(i, j, G0_ij, I0, events, stage_change)
+  }
+  
+  # get C counts and D counts
+  type_phase = c('HH0','HI0','II0','HH1','HI1','II1')
+  #C_all = numeric(6); D_all = numeric(6)
+  C_all = colSums(net_tables[,15:20])
+  D_all = colSums(net_tables[,21:26])
+  # for(type in c(3:5)){
+  #   # connections before change
+  #   C_all[type-2] = sum(events_T0$event==type)
+  #   # connections after change
+  #   C_all[type+1] = sum(events_T1$event==type)
+  # }
+  # for(type in c(6:8)){
+  #   # disconnections before change
+  #   D_all[type-5] = sum(events_T0$event==type)
+  #   # disconnections
+  #   D_all[type-2] = sum(events_T1$event==type)
+  # }
+  names(C_all) = type_phase
+  names(D_all) = type_phase
+  
+  # get net_c_table and net_d_table
+  net_tables = net_tables[,1:14]
+  net_c_table = net_tables[,1:7]
+  net_d_table = net_tables[,8:14]
+  
+  # data frame column names
+  epi_table = as.data.frame(epi_tables)
+  names(epi_table) = c('Ia_expo','Is_expo','Ia_ti','Is_ti',
+                       'sick_time','latent_time')
+  net_c_table = as.data.frame(net_c_table)
+  names(net_c_table) = c('Nc',type_phase)
+  net_d_table = as.data.frame(net_d_table)
+  names(net_d_table) = c('Nd',type_phase)
+  
+  # return summary results
+  list(counts = c(nE=nE, nIa=nIa, nIs=nIs, nR=nR),
+       C_all = C_all, D_all = D_all,
+       epi_table = epi_table, 
+       net_c_table = net_c_table,
+       net_d_table = net_d_table, I0=I0)
+}
+
+## try it out
+## and time it
+# st = Sys.time()
+# summ200 = summarize_events2(G0, I0, events, change_times)
+# cat(Sys.time() - st)
+# ~ 10 seconds on my laptop - not great, but not bad either
+
+
+# (4): function to iteratively solve for MLEs
+solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1){
+  
+  # X has to be a dataframe with column names!!
+  
+  # wrangle X into needed shape of Xij (for network part)
+  # (original X: n by p design matrix)
+  # (want XX: n*(n-1)/2 by p design matrix)
+  N = nrow(X)
+  pairs = which(upper.tri(matrix(nrow=N, ncol=N)), arr.ind = T)
+  XX = apply(pairs, 1, sum_covariates, X)
+  XX = t(XX)
+  
+  
+  # extract summary statistics
+  nI = summaries$counts['nE'] # take nE = nI
+  nIs = summaries$counts['nIs']
+  nIa = summaries$counts['nIa']
+  nR = summaries$counts['nR']
+  C_all = summaries$C_all
+  D_all = summaries$D_all
+  epi_table = summaries$epi_table
+  net_c_table = summaries$net_c_table
+  net_d_table = summaries$net_d_table
+  I0 = summaries$I0
+  
+  # 0. get manifestation rate phi and symp. prob. p_s
+  phi = (nIs + nIa)/sum(epi_table$latent_time)
+  p_s = nIs/(nIs + nIa)
+  
+  # 1. get recovery rate gamma
+  gamma = nR/sum(epi_table$sick_time)
+  
+  # 2. get parameters for the infection side: beta, eta, b_S
+  eta = initEta
+  beta = nI/(sum(epi_table$Ia_expo) + eta * sum(epi_table$Is_expo))
+  
+  # 10/19/20: change a little bit to make sure things can run...
+  # get rid of I0: no exposure on I0 at all
+  #got_infected = which(epi_table$latent_time > 0)
+  got_infected = which((epi_table$Ia_ti + epi_table$Is_ti) > 0 & epi_table$latent_time > 0)
+  got_infected = got_infected[got_infected != I0]
+  Y_infec = (epi_table$latent_time > 0) %>% as.numeric()
+  Y_infec[I0] = 0
+  
+  for(it in 1:maxIter){
+    # 2.1 estimate b_S
+    Expo = (epi_table$Ia_expo + eta * epi_table$Is_expo) * beta
+    has_expo = which(Expo > 0)
+    ## set Y_infec to the original thing before re-subsetting
+    Y_infec = (epi_table$latent_time > 0) %>% as.numeric()
+    Y_infec[I0] = 0
+    Y_infec = Y_infec[has_expo]
+    X_infec = X[has_expo,]
+    Expo = Expo[has_expo]
+    infec_poi = glm(Y_infec~X_infec-1+offset(log(Expo)), family = poisson())
+    b_S = infec_poi$coefficients %>% as.numeric()
+    
+    # 2.2 estimate beta
+    beta_old = beta
+    indiv_effects = exp(c(X_infec %*% b_S))
+    beta = nI/sum(indiv_effects * Expo/beta_old)
+    
+    # 2.3 estimate eta
+    llfunc = function(eta){
+      beta * sum(indiv_effects * (epi_table$Ia_expo + eta * epi_table$Is_expo)[has_expo]) -
+        sum(log((epi_table$Ia_ti + epi_table$Is_ti * eta)[got_infected]))
+    }
+    ## 10/18/2020: de-bugged - previously this was not correct
+    llgrr = function(eta){
+      beta * sum(indiv_effects * epi_table$Is_expo[has_expo]) -
+        sum(epi_table$Is_ti[got_infected]/(epi_table$Ia_ti + epi_table$Is_ti * eta)[got_infected])
+    }
+    eta_old = eta
+    
+    ## output some info
+    cat('beta=',beta, 'eta=', eta, '\nfn(eta)=', llfunc(eta),
+       'b_S=',b_S)
+    
+    eta = optim(eta_old, llfunc, llgrr, 
+                method = "L-BFGS-B", lower = 1e-6, upper = Inf)$par
+    
+    # 2.4 if difference < tol, stop
+    if(abs(beta_old - beta) < tol & abs(eta_old - eta) < tol){
+      break
+    }
+    
+  }
+  
+  # 3. get parameters for link activation: alphas, b_alpha
+  alpha = numeric(6)
+  names(alpha) = c('HH0','HI0','II0','HH1','HI1','II1')
+  
+  for(type in names(alpha)){
+    total_dur = sum(net_c_table[[type]])
+    if(total_dur > 0){
+      alpha[type] = C_all[type]/total_dur
+    }else{
+      alpha[type] = 0
+    }
+  }
+  
+  for(it in 1:maxIter){
+    # 3.1 estimate b_alpha
+    all_weights = c(as.matrix(net_c_table[2:7]) %*% alpha)
+    has_weight = which(all_weights > 0)
+    XX_alpha = XX[has_weight,]
+    all_weights = all_weights[has_weight]
+    alpha_poi = glm(net_c_table$Nc[has_weight]~XX_alpha-1+offset(log(all_weights)), 
+                    family = poisson())
+    b_alpha = alpha_poi$coefficients %>% as.numeric()
+    
+    # 3.2 estimate alpha
+    alpha_old = alpha
+    pair_effects = exp(c(XX_alpha * b_alpha))
+    for(type in names(alpha)){
+      total_dur = sum(net_c_table[[type]][has_weight] * pair_effects)
+      if(total_dur > 0){
+        alpha[type] = C_all[type]/total_dur
+      }else{
+        alpha[type] = 0
+      }
+    }
+    
+    # 3.3 if difference < tol, stop
+    if(all(abs(alpha_old - alpha) < tol)){
+      break
+    }
+  }
+  
+  
+  # 4. get parameters for link termination: omegas, b_omega
+  omega = numeric(6)
+  names(omega) = c('HH0','HI0','II0','HH1','HI1','II1')
+  
+  for(type in names(omega)){
+    total_dur = sum(net_d_table[[type]])
+    if(total_dur > 0){
+      omega[type] = D_all[type]/total_dur
+    }else{
+      omega[type] = 0
+    }
+  }
+  
+  for(it in 1:maxIter){
+    # 3.1 estimate b_omega
+    all_weights = c(as.matrix(net_d_table[2:7]) %*% omega)
+    has_weight = which(all_weights > 0)
+    XX_omega = XX[has_weight,]
+    all_weights = all_weights[has_weight]
+    omega_poi = glm(net_d_table$Nd[has_weight]~XX_omega-1+offset(log(all_weights)), 
+                    family = poisson())
+    b_omega = omega_poi$coefficients %>% as.numeric()
+    
+    # 3.2 estimate omega
+    omega_old = omega
+    pair_effects = exp(c(XX_omega * b_omega))
+    for(type in names(omega)){
+      total_dur = sum(net_d_table[[type]][has_weight] * pair_effects)
+      if(total_dur > 0){
+        omega[type] = D_all[type]/total_dur
+      }else{
+        omega[type] = 0
+      }
+    }
+    
+    # 3.3 if difference < tol, stop
+    if(all(abs(omega_old - omega) < tol)){
+      break
+    }
+  }
+  
+  
+  return(list(beta=beta, eta=eta, b_S=b_S, gamma=gamma, 
+              phi=phi, p_s = p_s,
+              alpha=alpha, b_alpha=b_alpha, omega=omega, b_omega=b_omega))
+}
+
+
+
+#####
 # II. for missing data
 
 # (1) missing recovery time
@@ -632,43 +979,43 @@ get_nei_expo_all <- function(G_all, events, expo_times, report, times){
 }
 
 
-# 10/17/2020: try it out
-# try it out
-setwd('~/Documents/Research_and_References/Hetero_EpiNet_2020/')
-events = read_csv('hetero_ex2_dat.csv')
-names(events) = c('time','event','per1','per2')
-I0 = 103 # directly pulled from Python console
-## also need to re-label people with 1-indexing (rather than 0-indexing)
-events$per1 = events$per1 + 1
-events$per2 = events$per2 + 1
-
-G0 = as.matrix(read_delim('hetero_ex2_G0.txt', delim=" ", col_names = FALSE))
-colnames(G0) = NULL
-X = as.matrix(read_delim('hetero_ex2_X.txt', delim=" ", col_names = FALSE))
-colnames(X) = NULL
+# # 10/17/2020: try it out
+# setwd('~/Documents/Research_and_References/Hetero_EpiNet_2020/')
+# events = read_csv('hetero_ex2_dat.csv')
+# names(events) = c('time','event','per1','per2')
+# I0 = 103 # directly pulled from Python console
+# change_times = c(5,30)
+# ## also need to re-label people with 1-indexing (rather than 0-indexing)
+# events$per1 = events$per1 + 1
+# events$per2 = events$per2 + 1
+# 
+# G0 = as.matrix(read_delim('hetero_ex2_G0.txt', delim=" ", col_names = FALSE))
+# colnames(G0) = NULL
+# X = as.matrix(read_delim('hetero_ex2_X.txt', delim=" ", col_names = FALSE))
+# colnames(X) = NULL
 
 # get an `exposure_times` list
 # exposure_times = events %>% filter(event == 1) %>% 
 #   mutate(exposed = per1, times = time) %>%
 #   select(exposed, times) %>% as.list()
 
-# try the `get_nei_expo_all` function
-infec_nei = get_nei_expo_all(G_report, events, exposure_times, 
-                             miss_dat$report, miss_dat$report.times)
-
-# check out a few to see if their real infector is in the set
-events %>% filter(event==1, per1 %in% c(124,28,172))
-
-# compare it with epi_tables to validate
-# sanity check: potential infector set should be larger than real infector set!
-exposed = exposure_times$exposed
-for(e in exposed){
-  Ia_ti = epi_tables[e,'Ia_ti']
-  Is_ti = epi_tables[e,'Is_ti']
-  size_a = length(infec_nei[as.character(e)]$Ia)
-  size_s = length(infec_nei[as.character(e)]$Is)
-  cat('Person',e,'Ia size:', Ia_ti>=size_a, 'Is size:', Is_ti >=size_s,'\n')
-}
+# # try the `get_nei_expo_all` function
+# infec_nei = get_nei_expo_all(G_report, events, exposure_times, 
+#                              miss_dat$report, miss_dat$report.times)
+# 
+# # check out a few to see if their real infector is in the set
+# events %>% filter(event==1, per1 %in% c(124,28,172))
+# 
+# # compare it with epi_tables to validate
+# # sanity check: potential infector set should be larger than real infector set!
+# exposed = exposure_times$exposed
+# for(e in exposed){
+#   Ia_ti = epi_tables[e,'Ia_ti']
+#   Is_ti = epi_tables[e,'Is_ti']
+#   size_a = length(infec_nei[as.character(e)]$Ia)
+#   size_s = length(infec_nei[as.character(e)]$Is)
+#   cat('Person',e,'Ia size:', Ia_ti>=size_a, 'Is size:', Is_ti >=size_s,'\n')
+# }
 
 # benchmark it...
 # st = Sys.time()
@@ -681,7 +1028,45 @@ for(e in exposed){
 # 100 times take about 1 minute... (not super bad)
 
 
-# iii) DARCI+: lower bound update is not uniform, adapted from before
+# iii) function to obtain intervals to impute recovery times on, and ids of involved individuals
+get_miss_recov <- function(report, times, events){
+  # data storage
+  lbs = NULL; ubs = NULL
+  miss_recov = list()
+  # go through all intervals and check
+  nt = length(times)
+  for(ix in 2:nt){
+    lb = times[ix-1]; ub = times[ix]
+    #epid.change = report[ix,] - report[ix-1,]
+    #recovered = which(epid.change < 0)
+    
+    # 10/19/20 update: R=-2
+    epid.change = report[ix,] - report[ix-1,]
+    recovered = which(epid.change < 0 & report[ix,] == -2)
+    
+    cat("Interval:",lb,ub,"\n")
+    cat("Recovered:",recovered,"\n")
+    
+    if(length(recovered) > 0){
+      # check if they are included in the event log already
+      st = min(which(events$time > lb)); en = max(which(events$time <= ub))
+      events.sel = events[st:en,]
+      events.sel = events[events$event == 2,]
+      if(nrow(events.sel) > 0){
+        exact.recovered = events.sel$per1
+        recovered = recovered[! recovered %in% exact.recovered]
+      }
+      # record if 'recovered' non-empty
+      if(length(recovered) > 0){
+        lbs = c(lbs,lb); ubs = c(ubs, ub)
+        miss_recov = append(miss_recov, list(recovered))
+      }
+    }
+  }
+  return(list(intervals = data.frame(lb=lbs, ub=ubs), recover = miss_recov))
+}
+
+# iv) DARCI+: lower bound update is not uniform, adapted from before
 propose_recov_filter <- function(lb, ub, recovers, exposure_times, nei_infec, 
                                  gam=0.2, exp_eta=1.5){
   
@@ -734,12 +1119,15 @@ propose_recov_filter <- function(lb, ub, recovers, exposure_times, nei_infec,
             poi = nei_s
           }
         }
-        if(length(poi)==1){
-          p = poi
-        }else{
-          p = sample(poi, 1)
+        ## 10/19/2020: small change to maybe resolve poi==NULL case
+        if(length(poi) > 1){
+          if(length(poi)==1){
+            p = poi
+          }else{
+            p = sample(poi, 1)
+          }
+          bounds[recovers==p] = max(bounds[recovers==p],t)
         }
-        bounds[recovers==p] = max(bounds[recovers==p],t)
       }
     }
   }
@@ -766,8 +1154,8 @@ propose_recov_filter <- function(lb, ub, recovers, exposure_times, nei_infec,
 # (2) missing exposure time
 
 # get a list of recovers - times
-recovery_times = events %>% filter(event==2) %>% 
-  select(recov=per1, time)
+# recovery_times = events %>% filter(event==2) %>% 
+#   select(recov=per1, time)
 
 # i) a function to combine two data frames and sort by time
 # df_combine <- function(event1, event2){
@@ -796,10 +1184,11 @@ recovery_times = events %>% filter(event==2) %>%
 #    given current recovery times and exp_eta
 
 get_expo_risk_i <- function(i, t_i, G_all, tmax, tmin, report, times,
-                            events, recovery_times, exp_eta=1.5){
+                            events, recovery_times, exp_eta=1.5, details=TRUE){
   # t_i: manifestation time of i
   # G_all: all adjmats at report times
-  # recovery_times: a sorted-by-time data frame of imputed recovery times (currently)
+  # recovery_times: a data frame of imputed recovery times (no need to be sorted)
+  # details: if TRUE, return all stuff; o.w., return sampled expo time only
   
   st = max(0,t_i - tmax)
   en = ifelse(t_i - tmin <= 0, t_i, t_i - tmin)
@@ -952,23 +1341,101 @@ get_expo_risk_i <- function(i, t_i, G_all, tmax, tmin, report, times,
   }
   
   # return the sampled exposure time
-  list(changes = change_times, lengths = lens, risks = risk_val, samp = res)
+  if(details){
+    list(changes = change_times, lengths = lens, risks = risk_val, samp = res)
+  }else{
+    res
+  }
+  
 }
 
 # try it out
-i = 23
-t_i = events %>% filter(event %in% c(9,10), per1==i) %>% 
-  select(time) %>% pull()
-er_i = get_expo_risk_i(i,t_i, G_report, tmax=7, tmin=1,
-                       miss_dat$report, miss_dat$report.times, miss_dat$events,
-                       recovery_times)
+# i = 23
+# t_i = events %>% filter(event %in% c(9,10), per1==i) %>% 
+#   select(time) %>% pull()
+# er_i = get_expo_risk_i(i,t_i, G_report, tmax=7, tmin=1,
+#                        miss_dat$report, miss_dat$report.times, miss_dat$events,
+#                        recovery_times, details = FALSE)
+# 
+# i = 77 # problem with this one!! --> probably fixed!
+# t_i = events %>% filter(event %in% c(9,10), per1==i) %>% 
+#   select(time) %>% pull()
+# er_i = get_expo_risk_i(i,t_i, G_report, tmax=7, tmin=0,
+#                        miss_dat$report, miss_dat$report.times, miss_dat$events,
+#                        recovery_times)
+# events %>% filter(event ==1 , per1==i)
+# events %>% filter(event %in% c(9,10), per1==65) # 17.8
 
-i = 77 # problem with this one!! --> probably fixed!
+i = 73
 t_i = events %>% filter(event %in% c(9,10), per1==i) %>% 
   select(time) %>% pull()
 er_i = get_expo_risk_i(i,t_i, G_report, tmax=7, tmin=0,
                        miss_dat$report, miss_dat$report.times, miss_dat$events,
-                       recovery_times)
-events %>% filter(event ==1 , per1==i)
-events %>% filter(event %in% c(9,10), per1==65) # 17.8
+                       recovery_times, details = TRUE)
+events.orig %>% filter(per1==i|per2==i|event %in% c(9,10))
 
+
+# iii) get sampled exposure times for all people (who ever manifested)
+get_expo_times <- function(manifest_times, G_all, tmax, tmin, report, times,
+                           events, recovery_times, exp_eta=1.5){
+  
+  # manifest_times: list of manifest times
+  ## manifested: ids of people
+  ## times: time points
+  
+  manifested = manifest_times$manifested
+  #M = ifelse(length(manifested) > 100, length(manifested), 100)
+  #res = foreach(i=manifested, .combine = 'list', .maxcombine = M) %dopar% {
+  res = foreach(i=manifested, .combine = 'c') %dopar% {
+    
+    t_i = manifest_times$times[manifested == i]
+    get_expo_risk_i(i, t_i, G_all, tmax, tmin, report, times,
+                    events, recovery_times, exp_eta, details = FALSE)
+  }
+  # set name as person id
+  names(res) = manifested
+  res
+}
+
+## try it out
+# ### get a manifested list first
+# manifest = events %>% filter(event %in% c(9,10)) %>%
+#   select(manifested = per1, times = time) %>%
+#   as.list()
+# 
+# ### apply the function
+# imp_expo_times = get_expo_times(manifest, G_report, 7, 0, 
+#                                 miss_dat$report, miss_dat$report.times, 
+#                                 miss_dat$events, recovery_times, exp_eta=1.5) 
+# imp_expo_times
+
+
+# (3) combine observed data with imputed recovery and exposure times
+combine_data <- function(events, expo_times, recov_times){
+  # events: the observed data; without exposure (1) and recovery (2) events
+  # expo_times: a list of imputed exposure times
+  ## exposed: id
+  ## times: time
+  # recov_times: a data frame of imputed recovery times (currently):
+  ##  recov: id
+  ##  time: time
+  
+  expo_times = data.frame(expo_times) %>% 
+    mutate(event = 1, per2=NA) %>%
+    select(time = times, event, per1=exposed, per2)
+  
+  recov_times = recov_times %>%
+    mutate(event = 2, per2=NA) %>%
+    select(time = time, event, per1=recov, per2)
+  
+  events_aug = rbind(events, expo_times, recov_times) %>%
+    arrange(time)
+  
+  events_aug
+}
+
+## try it out
+# events_aug = combine_data(miss_dat$events, exposure_times, recovery_times_old)
+  
+  
+  
