@@ -6,13 +6,16 @@
 # if TRUE, manually fix b_* = 0
 # to focus on the main parameters
 
+# 11/02/2020:
+# try to force longer latency by setting tmin = 5...
+
 library(ggplot2)
 
 source("inference_utils_1.R")
 
 # data directory and outdir
 data_root = 'hetero_data/'
-outdir = 'hetero_results4/'
+outdir = 'hetero_results5/'
 
 
 # server stuff, set seed and example data path
@@ -242,7 +245,8 @@ infer_partial_data <- function(fpath, interval = 7, miss_recov_prop = 1, miss_ex
 
 
 ## plot inference results
-plot_estimates <- function(res){
+## 11/01/2020: add traceplot as well
+plot_estimates <- function(res, trace=TRUE){
   # res: a combined list of both MLEs (complete data) and stoch. EM
   
   varnames = names(comp_res$estimates)
@@ -266,6 +270,20 @@ plot_estimates <- function(res){
           labs(x=v) +
           theme_bw()
       )
+      
+      # add traceplot if...
+      if(trace){
+        pdat = pdat %>% mutate(samp = 1:n())
+        print(
+          ggplot(pdat, aes(y=val,x=samp)) + 
+            geom_hline(yintercept = truth[[v]], size=1.5, color='red') +
+            geom_hline(yintercept = MLEs[[v]], size=1.5, color='darkgray') +
+            geom_line(size=0.3)+
+            labs(y=v, x='iteration') +
+            theme_bw()
+        )
+      }
+      
     }
     # if the parameter has length > 1: don't make plots for now
   }
@@ -290,6 +308,9 @@ comp_res = infer_complete_data(sub_dir, maxIter = 50, tol = 1e-6,
 # 2. increase "tmax" to 50 (so expo time imputation window will be all the history!)
 # 3. try 5 different seeds (thus expo time imputation will start at different spots)
 
+## 11/01/2020 more attempt:
+# set tmin = 1, to force longer latency...
+
 REP = 5
 
 ## plot things together
@@ -297,8 +318,9 @@ pdfpath = paste0(outdir,"res_",sub_dir,".pdf")
 pdf(pdfpath, width = 8, height = 6)
 
 for(rep in 1:REP){
-  this.seed = ss + rep
+  this.seed = ss + rep*103 %% 11
   part_res = infer_partial_data(sub_dir, interval = 7, tmax=50, 
+                                tmin = 1,
                                 numIter = 150, burn = 50,
                                 maxIter = 50, seed = this.seed,
                                 hack0 = hh)

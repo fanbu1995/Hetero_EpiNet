@@ -1307,8 +1307,9 @@ get_expo_risk_i <- function(i, t_i, G_all, tmax, tmin, report, times,
   risk_val = NULL
   
   # if already exhausted events
-  if(r==nrow(events)){
-    change_times = c(change_time, en)
+  # OR if there is no events ...
+  if(r>=nrow(events)){
+    change_times = c(change_times, en)
     risk_val = sum(nei * (epid==1)) + sum(nei * (epid==2)) * exp_eta
   }else{
     prev_risk = sum(nei * (epid==1)) + sum(nei * (epid==2)) * exp_eta
@@ -1385,9 +1386,9 @@ get_expo_risk_i <- function(i, t_i, G_all, tmax, tmin, report, times,
   
 }
 
-# try it out
+# # try it out
 # i = 23
-# t_i = events %>% filter(event %in% c(9,10), per1==i) %>% 
+# t_i = events %>% filter(event %in% c(9,10), per1==i) %>%
 #   select(time) %>% pull()
 # er_i = get_expo_risk_i(i,t_i, G_report, tmax=7, tmin=1,
 #                        miss_dat$report, miss_dat$report.times, miss_dat$events,
