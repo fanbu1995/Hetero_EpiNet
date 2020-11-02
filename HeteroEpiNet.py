@@ -375,8 +375,8 @@ class HeteroEpiNet:
                 pair = choice(range(len(pair_rates)), p=pair_probs, replace=False)
                 p1, p2 = indices[0][pair], indices[1][pair] # p2 infects p1
                 
-                if verbose:
-                    print('At time {}, {} gets exposed by {}, their adjmat entry is {}.'.format(t_next, p1, p2, self.adjmat[p1,p2]))
+                #if verbose:
+                print('At time {}, {} gets exposed by {}, their adjmat entry is {}.'.format(t_next, p1, p2, self.adjmat[p1,p2]))
                 
                 self.epid[p1] = -1
                 
@@ -624,7 +624,7 @@ def simulateData(params, N, p0, T, phase_bounds, Xp = 2,
     EpiNet = HeteroEpiNet(N, phase_bounds, X)
 
     # get simulation results
-    res, G0, I0 = EpiNet.simulate(T=T, p0=p0, params=params, verbose=False)   
+    res, G0, I0 = EpiNet.simulate(T=T, p0=p0, params=params, verbose=False, seed=seed)   
     
     # create the data dir
     des = os.path.join(savepath, dirname)
@@ -665,20 +665,89 @@ def simulateData(params, N, p0, T, phase_bounds, Xp = 2,
     
     print('Simulation done and info saved! I0 is',I0)
     return
+
+#%%
     
 # try it out
 if __name__ == '__main__':
-    pa = {'beta': 0.2, 'eta': 0.2, 'gamma': 0.1, 
-      'phi': 0.2, 'p_s': 0.6,
-      'alpha':[np.array([0.0006,0.0006,0.0006]), np.array([0.0006,0.0002,0.0006])],
-      'omega':[np.array([0.005,0.005,0.005]), np.array([0.005,0.05,0.005])],
-      'b_S': np.array([0,-1]),
-      'b_alpha': np.array([1,0]),
-      'b_omega': np.array([1,-1])}
     
-    simulateData(pa, 200, 0.05, 50, [5,30], Xp = 2, 
-                 savepath='/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/', dirname = 'ex1',
-                 seed=83)
+    # set network regression coefs = 0 for now...
+    # generate 10 datasets
+    
+    N_dat = 10
+    for i in range(N_dat):
+        s0 = i+57 # start from 2...
+        dirname = 'ex'+str(i+2)
+        
+        if i % 2 == 0:
+            # N = 200 settings
+            N = 200; p0 = 0.05; tmax = 50; stage_change = [20,50]
+            pa = {'beta': 0.15, 'eta': 0.2, 'gamma': 0.1, 
+                  'phi': 0.2, 'p_s': 0.6,
+                  'alpha':[np.array([0.0006,0.0006,0.0006]), np.array([0.0006,0.0002,0.0006])],
+                  'omega':[np.array([0.005,0.005,0.005]), np.array([0.005,0.05,0.005])],
+                  'b_S': np.array([0,-1]),
+                  'b_alpha': np.array([0,0]),
+                  'b_omega': np.array([0,0])}
+        else:
+            # N = 100 settings
+            N = 100; p0 = 0.05; tmax = 50; stage_change = [20,50]
+            pa = {'beta': 0.2, 'eta': 0.2, 'gamma': 0.1, 
+              'phi': 0.2, 'p_s': 0.6,
+              'alpha':[np.array([0.001,0.001,0.001]), np.array([0.001,0.0003,0.001])],
+              'omega':[np.array([0.005,0.005,0.005]), np.array([0.005,0.05,0.005])],
+              'b_S': np.array([0,-1]),
+              'b_alpha': np.array([0,0]),
+              'b_omega': np.array([0,0])}
+    
+        simulateData(pa, N, p0, tmax, stage_change, Xp = 2, 
+                     savepath='/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/', 
+                     dirname = dirname,
+                     seed=s0)
+        
+        
+#%%
+
+# 10/31/2020: a debugging hacked version
+# set b_S = b_alpha = b_omega = 0
+# so we can focus on the main parameters ('cause something seems a bit off)
+
+if __name__ == '__main__':
+    
+    # set network regression coefs = 0 for now...
+    # generate 10 datasets
+    
+    N_dat = 10
+    for i in range(11,N_dat+11): # start from 11...
+        s0 = i+78 
+        dirname = 'ex'+str(i)
+        
+        if i % 2 == 0:
+            # N = 200 settings
+            N = 200; p0 = 0.05; tmax = 50; stage_change = [20,50]
+            pa = {'beta': 0.15, 'eta': 0.2, 'gamma': 0.1, 
+                  'phi': 0.2, 'p_s': 0.6,
+                  'alpha':[np.array([0.0006,0.0006,0.0006]), np.array([0.0006,0.0002,0.0006])],
+                  'omega':[np.array([0.005,0.005,0.005]), np.array([0.005,0.05,0.005])],
+                  'b_S': np.array([0,0]),
+                  'b_alpha': np.array([0,0]),
+                  'b_omega': np.array([0,0])}
+        else:
+            # N = 100 settings
+            N = 100; p0 = 0.05; tmax = 50; stage_change = [20,50]
+            pa = {'beta': 0.2, 'eta': 0.2, 'gamma': 0.1, 
+              'phi': 0.2, 'p_s': 0.6,
+              'alpha':[np.array([0.001,0.001,0.001]), np.array([0.001,0.0003,0.001])],
+              'omega':[np.array([0.005,0.005,0.005]), np.array([0.005,0.05,0.005])],
+              'b_S': np.array([0,0]),
+              'b_alpha': np.array([0,0]),
+              'b_omega': np.array([0,0])}
+    
+        simulateData(pa, N, p0, tmax, stage_change, Xp = 2, 
+                     savepath='/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/', 
+                     dirname = dirname,
+                     seed=s0)
+        
     
     
 

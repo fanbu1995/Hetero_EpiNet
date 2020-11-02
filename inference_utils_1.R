@@ -2,8 +2,9 @@
 
 # utility functions for Hetero EpiNet
 
-library(dplyr)
+library(tidyverse)
 library(foreach)
+library(doParallel)
 library(Matrix)
 registerDoParallel()
 
@@ -311,8 +312,9 @@ summarize_epi <- function(i, G0_i, I0, events){
           epi_tab['Is_ti'] = sum(nei * (epid==2))
           
           # some info
-          cat('when ',p1,' got infected, had ', epi_tab['Ia_ti'],
-              'Ia contacts and ', epi_tab['Is_ti'], 'Is contacts.\n')
+          # taken out!
+          #cat('when ',p1,' got infected, had ', epi_tab['Ia_ti'],
+          #    'Ia contacts and ', epi_tab['Is_ti'], 'Is contacts.\n')
         }
       }else if (z %in% c(9,10)){
         # manifestation: becoming Ia or Is
@@ -683,7 +685,23 @@ summarize_events2 <- function(G0, I0, events, stage_change){
 
 
 # (4): function to iteratively solve for MLEs
-solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1){
+
+## (4.1) a function that sums up X_i and X_j given p=(i,j)
+sum_covariates <- function(p, X){
+  # make sure that i < j
+  if(p[1] > p[2]){
+    p = p[2:1]
+  }
+  i = p[1]; j = p[2]
+  
+  X[i,]+X[j,]
+}
+
+solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1, hack0=FALSE){
+  
+  # 10/31/2020:
+  # add a hack0 mode: 
+  # adjust all b_* to rep(0,p) to focus on main parameters
   
   # X has to be a dataframe with column names!!
   
@@ -722,6 +740,8 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1){
   # 10/19/20: change a little bit to make sure things can run...
   # get rid of I0: no exposure on I0 at all
   #got_infected = which(epi_table$latent_time > 0)
+  
+  # 10/24/20 fix: only get those who had infec neighbors at infec time!
   got_infected = which((epi_table$Ia_ti + epi_table$Is_ti) > 0 & epi_table$latent_time > 0)
   got_infected = got_infected[got_infected != I0]
   Y_infec = (epi_table$latent_time > 0) %>% as.numeric()
@@ -739,6 +759,11 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1){
     Expo = Expo[has_expo]
     infec_poi = glm(Y_infec~X_infec-1+offset(log(Expo)), family = poisson())
     b_S = infec_poi$coefficients %>% as.numeric()
+    
+    # hack it to zero if...
+    if(hack0){
+      b_S = rep(0, length(b_S))
+    }
     
     # 2.2 estimate beta
     beta_old = beta
@@ -758,8 +783,8 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1){
     eta_old = eta
     
     ## output some info
-    cat('beta=',beta, 'eta=', eta, '\nfn(eta)=', llfunc(eta),
-       'b_S=',b_S)
+    #cat('beta=',beta, 'eta=', eta, '\nfn(eta)=', llfunc(eta),
+    #   'b_S=',b_S)
     
     eta = optim(eta_old, llfunc, llgrr, 
                 method = "L-BFGS-B", lower = 1e-6, upper = Inf)$par
@@ -793,6 +818,11 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1){
     alpha_poi = glm(net_c_table$Nc[has_weight]~XX_alpha-1+offset(log(all_weights)), 
                     family = poisson())
     b_alpha = alpha_poi$coefficients %>% as.numeric()
+    
+    # hack it to zero if...
+    if(hack0){
+      b_alpha = rep(0, length(b_alpha))
+    }
     
     # 3.2 estimate alpha
     alpha_old = alpha
@@ -835,6 +865,11 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1){
     omega_poi = glm(net_d_table$Nd[has_weight]~XX_omega-1+offset(log(all_weights)), 
                     family = poisson())
     b_omega = omega_poi$coefficients %>% as.numeric()
+    
+    # hack it to zero if...
+    if(hack0){
+      b_omega = rep(0, length(b_omega))
+    }
     
     # 3.2 estimate omega
     omega_old = omega
@@ -882,7 +917,8 @@ get_nei_expo_i <- function(i, expo_time, G_i, events, report, times){
   lb = max(times[times <= expo_time])
   ix = max(which(times <= expo_time))
   
-  cat('lower bound for expo time', expo_time, 'is', lb,'\n')
+  # taken out verbose info
+  #cat('lower bound for expo time', expo_time, 'is', lb,'\n')
 
   # init epid vector to record disease status
   # only need to start from the LB of the interval for new manifestation events
@@ -1366,13 +1402,13 @@ get_expo_risk_i <- function(i, t_i, G_all, tmax, tmin, report, times,
 # events %>% filter(event ==1 , per1==i)
 # events %>% filter(event %in% c(9,10), per1==65) # 17.8
 
-i = 73
-t_i = events %>% filter(event %in% c(9,10), per1==i) %>% 
-  select(time) %>% pull()
-er_i = get_expo_risk_i(i,t_i, G_report, tmax=7, tmin=0,
-                       miss_dat$report, miss_dat$report.times, miss_dat$events,
-                       recovery_times, details = TRUE)
-events.orig %>% filter(per1==i|per2==i|event %in% c(9,10))
+# i = 73
+# t_i = events %>% filter(event %in% c(9,10), per1==i) %>% 
+#   select(time) %>% pull()
+# er_i = get_expo_risk_i(i,t_i, G_report, tmax=7, tmin=0,
+#                        miss_dat$report, miss_dat$report.times, miss_dat$events,
+#                        recovery_times, details = TRUE)
+# events.orig %>% filter(per1==i|per2==i|event %in% c(9,10))
 
 
 # iii) get sampled exposure times for all people (who ever manifested)

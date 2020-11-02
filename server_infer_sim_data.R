@@ -1,13 +1,35 @@
-# 10/19/2020: the pipeline for estimating coefficients
+# 10/24/2020
+# run simulation data inference code on server
 
-setwd('~/Documents/Research_and_References/Hetero_EpiNet_2020/')
+# 10/31/2020
+# add a "hack0" mode:
+# if TRUE, manually fix b_* = 0
+# to focus on the main parameters
 
-data_root = '~/Documents/Research_and_References/Hetero_EpiNet_2020/'
+library(ggplot2)
 
 source("inference_utils_1.R")
 
-# 1. estimate from complete data
-infer_complete_data <- function(fpath, maxIter=10, tol=1e-4, initEta = 1){
+# data directory and outdir
+data_root = 'hetero_data/'
+outdir = 'hetero_results4/'
+
+
+# server stuff, set seed and example data path
+slurm_arrayid <- Sys.getenv('SLURM_ARRAY_TASK_ID')
+s0 = as.numeric(slurm_arrayid)
+set.seed(s0)
+ss = sample(1000,1)
+
+sub_dir = paste0('ex',s0-1)
+
+# source the inference util funcs
+source("inference_utils_1.R")
+
+# defined functions
+## complete data
+infer_complete_data <- function(fpath, maxIter=10, tol=1e-4, initEta = 1,
+                                hack0 = FALSE){
   # fpath: folder name of data files under data_root
   # maxIter: max. iterations for the MLE optimization algorithms
   # tol: tolerance for MLE optimization algorithms
@@ -27,7 +49,7 @@ infer_complete_data <- function(fpath, maxIter=10, tol=1e-4, initEta = 1){
   summs = summarize_events2(G0, I0, events, stage_change)
   
   # get MLEs
-  estimates = solve_MLE(summs, X, maxIter, tol, initEta)
+  estimates = solve_MLE(summs, X, maxIter, tol, initEta, hack0)
   ## adjust "eta" names
   estimates[['exp_eta']] = estimates[['eta']]
   estimates[['eta']] = ifelse(estimates[['eta']] <= 0, Inf, log(estimates[['eta']]))
@@ -43,19 +65,12 @@ infer_complete_data <- function(fpath, maxIter=10, tol=1e-4, initEta = 1){
   list(estimates = estimates, truth = truth, errors = errors)
 }
 
-## try it out
-comp_res = infer_complete_data('ex1')
-
-# # profile it...
-# ## most time spent in `summarize_events2`
-# library(profvis)
-# profvis({comp_res = infer_complete_data('ex1')})
-
-# 2. estimate from partial data
+## partial data
 infer_partial_data <- function(fpath, interval = 7, miss_recov_prop = 1, miss_expo_prop = 1,
                                tmax = 7, tmin = 0,
                                numIter=100, burn=0, maxIter=20, tol=1e-6,
-                               initEta = 1, initGam = 0.2, seed=42, verbose=TRUE){
+                               initEta = 1, initGam = 0.2, seed=42, verbose=TRUE,
+                               hack0 = FALSE){
   
   # fpath: folder name of data files under data_root
   # miss_**_prop: missing proportion of recovery times and exposure times
@@ -176,7 +191,7 @@ infer_partial_data <- function(fpath, interval = 7, miss_recov_prop = 1, miss_ex
     if(verbose){cat('Summarizing events done!')}
     
     # 4) get MLEs
-    estimates = solve_MLE(summs, X, maxIter, tol, initEta)
+    estimates = solve_MLE(summs, X, maxIter, tol, initEta, hack0)
     ## adjust "eta" names
     estimates[['exp_eta']] = estimates[['eta']]
     estimates[['eta']] = ifelse(estimates[['eta']] <= 0, Inf, log(estimates[['eta']]))
@@ -226,7 +241,6 @@ infer_partial_data <- function(fpath, interval = 7, miss_recov_prop = 1, miss_ex
 }
 
 
-# 3. plot inference results
 ## plot inference results
 plot_estimates <- function(res){
   # res: a combined list of both MLEs (complete data) and stoch. EM
@@ -260,17 +274,45 @@ plot_estimates <- function(res){
 
 
 
-## try it out
-part_res = infer_partial_data('ex1',numIter = 50)
+# inference and plot
 
-## try larger tmax
-part_res2 = infer_partial_data('ex1', tmax=20, numIter = 50, seed = 83)
+## 10/31/2020 more change: hack0 = TRUE to focus on main parameters
+hh = TRUE
 
-part_res3 = infer_partial_data('ex1', tmax=35, numIter = 50, maxIter = 50,
-                               seed = 83)
+## complete data results (MLE)
+comp_res = infer_complete_data(sub_dir, maxIter = 50, tol = 1e-6, 
+                               initEta = 1.5, hack0 = hh)
+
+## partial data
+
+## 10/31/2020 change: 
+# 1. burn-in 100 iters and only take last 100 samples...
+# 2. increase "tmax" to 50 (so expo time imputation window will be all the history!)
+# 3. try 5 different seeds (thus expo time imputation will start at different spots)
+
+REP = 5
+
+## plot things together
+pdfpath = paste0(outdir,"res_",sub_dir,".pdf")
+pdf(pdfpath, width = 8, height = 6)
+
+for(rep in 1:REP){
+  this.seed = ss + rep
+  part_res = infer_partial_data(sub_dir, interval = 7, tmax=50, 
+                                numIter = 150, burn = 50,
+                                maxIter = 50, seed = this.seed,
+                                hack0 = hh)
+  
+  ## save results
+  part_res$MLE = comp_res$estimates
+  part_res$MLE_errors = comp_res$errors
+  savepath = paste0(outdir,"_",sub_dir,"_",rep,".rds")
+  saveRDS(part_res, file=savepath)
+  
+  ## plot this repetition result
+  plot_estimates(part_res)
+}
 
 
-## save it for now
-saveRDS(part_res, 'partial_infer_res50_Oct19.rds')
 
-saveRDS(part_res3, 'partial_infer_res50_longTmax_Oct24.rds')
+
