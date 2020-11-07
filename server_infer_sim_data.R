@@ -9,13 +9,17 @@
 # 11/02/2020:
 # try to force longer latency by setting tmin = 5...
 
+## 11/06/2020 more attempt:
+# 1. fix eta and phi and only focus on beta estimation
+# 2. set some fraction of expo times to truth and see what happens
+
 library(ggplot2)
 
 source("inference_utils_1.R")
 
 # data directory and outdir
 data_root = 'hetero_data/'
-outdir = 'hetero_results5/'
+outdir = 'hetero_results7/'
 
 
 # server stuff, set seed and example data path
@@ -69,11 +73,17 @@ infer_complete_data <- function(fpath, maxIter=10, tol=1e-4, initEta = 1,
 }
 
 ## partial data
-infer_partial_data <- function(fpath, interval = 7, miss_recov_prop = 1, miss_expo_prop = 1,
+
+## 11/06/2020: 
+# 1. make things easier by starting at the truth of exp(eta) and gamma
+# 2. set a "fixed_prop" to fix a fraction of exposure times to truth
+infer_partial_data <- function(fpath, interval = 7, 
+                               miss_recov_prop = 1, miss_expo_prop = 1,
                                tmax = 7, tmin = 0,
                                numIter=100, burn=0, maxIter=20, tol=1e-6,
-                               initEta = 1, initGam = 0.2, seed=42, verbose=TRUE,
-                               hack0 = FALSE){
+                               initEta = 1.22, initGam = 0.1, seed=42, verbose=TRUE,
+                               hack0 = FALSE, hack_eta_phi = FALSE,
+                               fix_expo_prop = 0){
   
   # fpath: folder name of data files under data_root
   # miss_**_prop: missing proportion of recovery times and exposure times
@@ -83,6 +93,9 @@ infer_partial_data <- function(fpath, interval = 7, miss_recov_prop = 1, miss_ex
   # tol: tolerance for MLE optimization algorithms
   # initEta: the initial exp(eta) value to try
   # initGam: the initial gamma value to use
+  # hack0: whether or not to hack b_* coefficients to zero (default FALSE)
+  # hack_eta_phi: whether or not to hack eta and phi to truth (default FALSE)
+  # fix_expo_prop: proportion of exposure times to fix to truth (default 0)
   
   set.seed(seed)
   
@@ -119,6 +132,23 @@ infer_partial_data <- function(fpath, interval = 7, miss_recov_prop = 1, miss_ex
     select(manifested = per1, times = time) %>%
     as.list()
   
+  # (11/06/2020) get the true exposure times for those manifested people
+  if(fix_expo_prop > 0){
+    # put together truth
+    true_expo_times = events.orig %>% 
+      filter(event == 1, per1 %in% manifest$manifested) %>%
+      select(per1, time)
+    or = sapply(manifest$manifested, function(x) which(true_expo_times$per1==x))
+    true_expo_times = true_expo_times[or,]
+    
+    # select a porportion of them to always fix
+    n_mani = nrow(true_expo_times)
+    selected = rbernoulli(n_mani, fix_expo_prop)
+    fixed_expo = true_expo_times$per1[selected]
+    fixed_expo_times = true_expo_times$time[selected]
+  }
+  
+  
   # get an initial conservative imputation of recovery times 
   # (everyone recovers at the end of interval)
   recovery_times = NULL
@@ -153,6 +183,11 @@ infer_partial_data <- function(fpath, interval = 7, miss_recov_prop = 1, miss_ex
     imp_expo_times = get_expo_times(manifest, G_all, tmax, tmin, 
                                     miss_dat$report, miss_dat$report.times, 
                                     events, recovery_times, exp_eta=exp_eta)
+    
+    ## fix some of them to the truth if...
+    if(fix_expo_prop > 0){
+      imp_expo_times[selected] = fixed_expo_times
+    }
     
     if(verbose){cat('Exposure times imputation done! ')}
     
@@ -194,10 +229,12 @@ infer_partial_data <- function(fpath, interval = 7, miss_recov_prop = 1, miss_ex
     if(verbose){cat('Summarizing events done!')}
     
     # 4) get MLEs
-    estimates = solve_MLE(summs, X, maxIter, tol, initEta, hack0)
+    ## 11/06/2020 update with hacked eta and phi included
+    estimates = solve_MLE(summs, X, maxIter, tol, initEta, 
+                          hack0, hack_eta_phi, truth$exp_eta, truth$phi)
     ## adjust "eta" names
     estimates[['exp_eta']] = estimates[['eta']]
-    estimates[['eta']] = ifelse(estimates[['eta']] <= 0, Inf, log(estimates[['eta']]))
+    estimates[['eta']] = ifelse(estimates[['eta']] <= 0, -Inf, log(estimates[['eta']]))
     
     if(verbose){cat('MLE obtained!')}
     
@@ -297,6 +334,10 @@ plot_estimates <- function(res, trace=TRUE){
 ## 10/31/2020 more change: hack0 = TRUE to focus on main parameters
 hh = TRUE
 
+## 11/06/2020 change: hack_eta_phi = TRUE to focus on beta only
+## then set it back...
+hep = FALSE
+
 ## complete data results (MLE)
 comp_res = infer_complete_data(sub_dir, maxIter = 50, tol = 1e-6, 
                                initEta = 1.5, hack0 = hh)
@@ -310,6 +351,11 @@ comp_res = infer_complete_data(sub_dir, maxIter = 50, tol = 1e-6,
 
 ## 11/01/2020 more attempt:
 # set tmin = 1, to force longer latency...
+# (this is reversed in later experiments)
+
+## 11/06/2020 more attempt:
+# 1. fix eta and phi and only focus on beta estimation
+# 2. set some fraction of expo times to truth and see what happens
 
 REP = 5
 
@@ -318,12 +364,14 @@ pdfpath = paste0(outdir,"res_",sub_dir,".pdf")
 pdf(pdfpath, width = 8, height = 6)
 
 for(rep in 1:REP){
-  this.seed = ss + rep*103 %% 11
+  this.seed = ss + rep*131 %% 13
+  fep = rep/5
   part_res = infer_partial_data(sub_dir, interval = 7, tmax=50, 
-                                tmin = 1,
+                                tmin = 0,
                                 numIter = 150, burn = 50,
                                 maxIter = 50, seed = this.seed,
-                                hack0 = hh)
+                                hack0 = hh, hack_eta_phi = hep,
+                                fix_expo_prop = fep)
   
   ## save results
   part_res$MLE = comp_res$estimates
