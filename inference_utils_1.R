@@ -697,11 +697,18 @@ sum_covariates <- function(p, X){
   X[i,]+X[j,]
 }
 
-solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1, hack0=FALSE){
+solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1, 
+                      hack0=FALSE, hack_eta_phi = FALSE, 
+                      true_Eta = NULL, true_phi = NULL){
   
   # 10/31/2020:
   # add a hack0 mode: 
   # adjust all b_* to rep(0,p) to focus on main parameters
+  
+  # 11/06/2020:
+  # add hack_eta_phi mode
+  # fix eta and phi to truth and only focus on beta!
+  # also added true_Eta and true_phi as parameters if need to hack
   
   # X has to be a dataframe with column names!!
   
@@ -729,6 +736,10 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1, hack0=FAL
   # 0. get manifestation rate phi and symp. prob. p_s
   phi = (nIs + nIa)/sum(epi_table$latent_time)
   p_s = nIs/(nIs + nIa)
+  
+  if(hack_eta_phi){
+    phi = true_phi
+  }
   
   # 1. get recovery rate gamma
   gamma = nR/sum(epi_table$sick_time)
@@ -789,6 +800,11 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1, hack0=FAL
     eta = optim(eta_old, llfunc, llgrr, 
                 method = "L-BFGS-B", lower = 1e-6, upper = Inf)$par
     
+    ## hack it to truth if...
+    if(hack_eta_phi){
+      eta = true_Eta
+    }
+    
     # 2.4 if difference < tol, stop
     if(abs(beta_old - beta) < tol & abs(eta_old - eta) < tol){
       break
@@ -802,7 +818,7 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1, hack0=FAL
   
   for(type in names(alpha)){
     total_dur = sum(net_c_table[[type]])
-    if(total_dur > 0){
+    if(!is.na(total_dur) && length(total_dur) > 0 && total_dur > 0){
       alpha[type] = C_all[type]/total_dur
     }else{
       alpha[type] = 0
@@ -829,7 +845,7 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1, hack0=FAL
     pair_effects = exp(c(XX_alpha * b_alpha))
     for(type in names(alpha)){
       total_dur = sum(net_c_table[[type]][has_weight] * pair_effects)
-      if(total_dur > 0){
+      if(!is.na(total_dur) && length(total_dur) > 0 && total_dur > 0){
         alpha[type] = C_all[type]/total_dur
       }else{
         alpha[type] = 0
@@ -849,7 +865,7 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1, hack0=FAL
   
   for(type in names(omega)){
     total_dur = sum(net_d_table[[type]])
-    if(total_dur > 0){
+    if(!is.na(total_dur) && length(total_dur) > 0 && total_dur > 0){
       omega[type] = D_all[type]/total_dur
     }else{
       omega[type] = 0
@@ -876,7 +892,7 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1, hack0=FAL
     pair_effects = exp(c(XX_omega * b_omega))
     for(type in names(omega)){
       total_dur = sum(net_d_table[[type]][has_weight] * pair_effects)
-      if(total_dur > 0){
+      if(!is.na(total_dur) && length(total_dur) > 0 && total_dur > 0){
         omega[type] = D_all[type]/total_dur
       }else{
         omega[type] = 0
@@ -1219,12 +1235,23 @@ propose_recov_filter <- function(lb, ub, recovers, exposure_times, nei_infec,
 #    on interval [expo_time-t_max, expo_time-t_min]
 #    given current recovery times and exp_eta
 
+# 11/08/2020
+# changes! previously it was most likely wrong
+
 get_expo_risk_i <- function(i, t_i, G_all, tmax, tmin, report, times,
-                            events, recovery_times, exp_eta=1.5, details=TRUE){
+                            events, recovery_times, x_i, b_S = c(0,0),
+                            exp_eta=1.5, beta = 0.2, phi = 0.2,
+                            details=TRUE){
   # t_i: manifestation time of i
   # G_all: all adjmats at report times
   # recovery_times: a data frame of imputed recovery times (no need to be sorted)
   # details: if TRUE, return all stuff; o.w., return sampled expo time only
+  
+  # x_i: i's covar vector
+  # b_S: current value of b_S
+  # exp_eta: current value of exp(eta)
+  # beta: current value of beta
+  # phi: current value of phi
   
   st = max(0,t_i - tmax)
   en = ifelse(t_i - tmin <= 0, t_i, t_i - tmin)
@@ -1370,11 +1397,56 @@ get_expo_risk_i <- function(i, t_i, G_all, tmax, tmin, report, times,
   lens = diff(change_times)
   nL = length(lens)
   if(nL == 1){
-    res = runif(1, min=st, max=en)
+    # prev. version
+    # res = runif(1, min=st, max=en)
+    
+    # 11/08/2020 fix
+    actual_risk = risk_val * beta * exp(sum(x_i * b_S))
+    res = sam_texp(1, actual_risk, a=st, b=en)
+    
+    # rejection sampling to scale w.r.t. latency duration
+    ratio = exp(-phi * (t_i - res))
+    flag = runif(1)
+    while(flag > ratio){
+      res = sam_texp(1, actual_risk, a=st, b=en)
+      ratio = exp(-phi * (t_i - res))
+      flag = runif(1)
+    }
+    
   }else{
+    # previous version
+    # weights = lens * risk_val
+    # A = sample(nL, 1, prob = weights)
+    # res = runif(1, min=change_times[A], max=change_times[A+1])
+    
+    # 11/08/2020 fix
+    ## get the integral on each interval
     weights = lens * risk_val
-    A = sample(nL, 1, prob = weights)
-    res = runif(1, min=change_times[A], max=change_times[A+1])
+    ## multiply by beta and exp(delta_i)
+    ## pad a zero at beginning
+    cums = c(0,cumsum(weights)) * beta * exp(sum(x_i * b_S))
+    ## take the exponent of negative
+    exp_cums = exp(-cums)
+    ## take diff to get prob on each interval
+    probs_interval = exp_cums[1:nL] - exp_cums[2:(nL+1)]
+    ## sample interval, get end points of it
+    A = sample(nL, 1, prob = probs_interval)
+    #A_left = change_times[A]
+    #A_right = change_times[A+1]
+    ## sample time on that interval
+    res = sam_texp(1, risk_val[A] * beta * exp(sum(x_i * b_S)), 
+                   a=change_times[A], b=change_times[A+1])
+    
+    # rejection sampling to scale w.r.t. latency duration
+    ratio = exp(-phi * (t_i - res))
+    flag = runif(1)
+    while(flag > ratio){
+      A = sample(nL, 1, prob = probs_interval)
+      res = sam_texp(1, risk_val[A] * beta * exp(sum(x_i * b_S)), 
+                     a=change_times[A], b=change_times[A+1])
+      ratio = exp(-phi * (t_i - res))
+      flag = runif(1)
+    }
   }
   
   # return the sampled exposure time
@@ -1414,11 +1486,13 @@ get_expo_risk_i <- function(i, t_i, G_all, tmax, tmin, report, times,
 
 # iii) get sampled exposure times for all people (who ever manifested)
 get_expo_times <- function(manifest_times, G_all, tmax, tmin, report, times,
-                           events, recovery_times, exp_eta=1.5){
+                           events, recovery_times, X, b_S = c(0,0),
+                           exp_eta=1.5, beta = 0.2, phi = 0.2){
   
   # manifest_times: list of manifest times
   ## manifested: ids of people
   ## times: time points
+  # X: the covar matrix (n by p)
   
   manifested = manifest_times$manifested
   #M = ifelse(length(manifested) > 100, length(manifested), 100)
@@ -1426,8 +1500,10 @@ get_expo_times <- function(manifest_times, G_all, tmax, tmin, report, times,
   res = foreach(i=manifested, .combine = 'c') %dopar% {
     
     t_i = manifest_times$times[manifested == i]
+    x_i = X[i,]
     get_expo_risk_i(i, t_i, G_all, tmax, tmin, report, times,
-                    events, recovery_times, exp_eta, details = FALSE)
+                    events, recovery_times, x_i, b_S,
+                    exp_eta, beta, details = FALSE)
   }
   # set name as person id
   names(res) = manifested

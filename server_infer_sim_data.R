@@ -13,13 +13,27 @@
 # 1. fix eta and phi and only focus on beta estimation
 # 2. set some fraction of expo times to truth and see what happens
 
+## 11/08/2020:
+# try fixing the expo time imputation algorithm, and
+# 1. still with hack0 = TRUE, just run stuff
+# 2. set some fraction of expo times to truth
+
+## 11/10/2020
+# fix eta, phi, etc. and only focus on beta again
+# to test out imputation algorithm
+
+## 11/11/2020
+# fixed a little bug in exposure time imputation code
+# and retry running stuff only with b_S = 0 fixed
+
+
 library(ggplot2)
 
 source("inference_utils_1.R")
 
 # data directory and outdir
 data_root = 'hetero_data/'
-outdir = 'hetero_results7/'
+outdir = 'hetero_results11/'
 
 
 # server stuff, set seed and example data path
@@ -81,7 +95,10 @@ infer_partial_data <- function(fpath, interval = 7,
                                miss_recov_prop = 1, miss_expo_prop = 1,
                                tmax = 7, tmin = 0,
                                numIter=100, burn=0, maxIter=20, tol=1e-6,
-                               initEta = 1.22, initGam = 0.1, seed=42, verbose=TRUE,
+                               initEta = 1.22, initGam = 0.1, 
+                               initBeta = 0.2, initPhi = 0.2,
+                               initB_S = c(0,0),
+                               seed=42, verbose=TRUE,
                                hack0 = FALSE, hack_eta_phi = FALSE,
                                fix_expo_prop = 0){
   
@@ -93,6 +110,8 @@ infer_partial_data <- function(fpath, interval = 7,
   # tol: tolerance for MLE optimization algorithms
   # initEta: the initial exp(eta) value to try
   # initGam: the initial gamma value to use
+  # initBeta: the initial beta value to use
+  # initB_S: the initial b_S vector to use
   # hack0: whether or not to hack b_* coefficients to zero (default FALSE)
   # hack_eta_phi: whether or not to hack eta and phi to truth (default FALSE)
   # fix_expo_prop: proportion of exposure times to fix to truth (default 0)
@@ -162,6 +181,9 @@ infer_partial_data <- function(fpath, interval = 7,
   ## current values of exp_eta and gam
   exp_eta = initEta
   gam = initGam
+  beta = initBeta
+  b_S = initB_S
+  phi = initPhi
   
   ## storage for the samples
   params = list()
@@ -182,7 +204,8 @@ infer_partial_data <- function(fpath, interval = 7,
     # 1) impute exposure times first
     imp_expo_times = get_expo_times(manifest, G_all, tmax, tmin, 
                                     miss_dat$report, miss_dat$report.times, 
-                                    events, recovery_times, exp_eta=exp_eta)
+                                    events, recovery_times, X, b_S,
+                                    exp_eta, beta, phi)
     
     ## fix some of them to the truth if...
     if(fix_expo_prop > 0){
@@ -241,6 +264,9 @@ infer_partial_data <- function(fpath, interval = 7,
     ## update current values of exp(eta) and gamma
     exp_eta = estimates[['exp_eta']]
     gam = estimates[['gamma']]
+    ## 11/08/2020: also get beta and b_S
+    beta = estimates[['beta']]
+    b_S = estimates[['b_S']]
     
     ## record it after burn-in
     if(s > burn){
@@ -336,6 +362,10 @@ hh = TRUE
 
 ## 11/06/2020 change: hack_eta_phi = TRUE to focus on beta only
 ## then set it back...
+
+## 11/10/2020: fix everything again and focus on beta only
+## to test out the new imputation algorithm
+## (11/11/2020: set it back)
 hep = FALSE
 
 ## complete data results (MLE)
@@ -359,17 +389,22 @@ comp_res = infer_complete_data(sub_dir, maxIter = 50, tol = 1e-6,
 
 REP = 5
 
+## set initial beta according to dataset
+i_beta = ifelse(s0%%2 == 0, 0.2, 0.15)
+
 ## plot things together
 pdfpath = paste0(outdir,"res_",sub_dir,".pdf")
 pdf(pdfpath, width = 8, height = 6)
 
 for(rep in 1:REP){
-  this.seed = ss + rep*131 %% 13
-  fep = rep/5
+  this.seed = ss + rep*131 %% 17
+  #fep = rep/5
+  fep = 0
   part_res = infer_partial_data(sub_dir, interval = 7, tmax=50, 
                                 tmin = 0,
                                 numIter = 150, burn = 50,
                                 maxIter = 50, seed = this.seed,
+                                initBeta = i_beta,
                                 hack0 = hh, hack_eta_phi = hep,
                                 fix_expo_prop = fep)
   
