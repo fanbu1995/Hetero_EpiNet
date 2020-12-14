@@ -749,10 +749,47 @@ if __name__ == '__main__':
                      seed=s0)
         
     
-    
-
+#%%
         
-            
+# 11/30/2020: change b_S = [0,1]
+# and see what happens to estimating beta
+    
+        
+if __name__ == '__main__':
+    
+    # set network regression coefs = 0 for now...
+    # generate 10 datasets
+    
+    N_dat = 10
+    for i in range(21,N_dat+21): # start from 21...
+        s0 = i+131
+        dirname = 'ex'+str(i)
+        
+        if i % 2 == 0:
+            # N = 200 settings
+            N = 200; p0 = 0.05; tmax = 50; stage_change = [20,50]
+            pa = {'beta': 0.15, 'eta': 0.2, 'gamma': 0.1, 
+                  'phi': 0.2, 'p_s': 0.6,
+                  'alpha':[np.array([0.0006,0.0006,0.0006]), np.array([0.0006,0.0002,0.0006])],
+                  'omega':[np.array([0.005,0.005,0.005]), np.array([0.005,0.05,0.005])],
+                  'b_S': np.array([0,1]),
+                  'b_alpha': np.array([0,0]),
+                  'b_omega': np.array([0,0])}
+        else:
+            # N = 100 settings
+            N = 100; p0 = 0.05; tmax = 50; stage_change = [20,50]
+            pa = {'beta': 0.2, 'eta': 0.2, 'gamma': 0.1, 
+              'phi': 0.2, 'p_s': 0.6,
+              'alpha':[np.array([0.001,0.001,0.001]), np.array([0.001,0.0003,0.001])],
+              'omega':[np.array([0.005,0.005,0.005]), np.array([0.005,0.05,0.005])],
+              'b_S': np.array([0,1]),
+              'b_alpha': np.array([0,0]),
+              'b_omega': np.array([0,0])}
+    
+        simulateData(pa, N, p0, tmax, stage_change, Xp = 2, 
+                     savepath='/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/', 
+                     dirname = dirname,
+                     seed=s0)
         
         
 

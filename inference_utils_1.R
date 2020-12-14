@@ -698,8 +698,8 @@ sum_covariates <- function(p, X){
 }
 
 solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1, 
-                      hack0=FALSE, hack_eta_phi = FALSE, 
-                      true_Eta = NULL, true_phi = NULL){
+                      hack0=FALSE, hack_eta_phi = FALSE, hackb_S = FALSE,
+                      true_Eta = NULL, true_phi = NULL, true_b_S = c(0,1)){
   
   # 10/31/2020:
   # add a hack0 mode: 
@@ -709,6 +709,11 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1,
   # add hack_eta_phi mode
   # fix eta and phi to truth and only focus on beta!
   # also added true_Eta and true_phi as parameters if need to hack
+  
+  # 12/01/2020
+  # add hackb_S mode
+  # set b_S to the truth and see if we can get beta and eta right
+  # ALSO try to restrict exp_eta > 1
   
   # X has to be a dataframe with column names!!
   
@@ -761,7 +766,7 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1,
   for(it in 1:maxIter){
     # 2.1 estimate b_S
     Expo = (epi_table$Ia_expo + eta * epi_table$Is_expo) * beta
-    has_expo = which(Expo > 0)
+    has_expo = which(Expo > 0) # check I0 not here!
     ## set Y_infec to the original thing before re-subsetting
     Y_infec = (epi_table$latent_time > 0) %>% as.numeric()
     Y_infec[I0] = 0
@@ -774,6 +779,12 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1,
     # hack it to zero if...
     if(hack0){
       b_S = rep(0, length(b_S))
+    }
+    
+    # (12/01/2020)
+    # hack b_S to true value if ...
+    if(hackb_S){
+      b_S = true_b_S
     }
     
     # 2.2 estimate beta
@@ -797,8 +808,14 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1,
     #cat('beta=',beta, 'eta=', eta, '\nfn(eta)=', llfunc(eta),
     #   'b_S=',b_S)
     
-    eta = optim(eta_old, llfunc, llgrr, 
-                method = "L-BFGS-B", lower = 1e-6, upper = Inf)$par
+    # (12/01/2020)
+    # restrict to > 1
+    eta = optim(eta_old, llfunc, llgrr,
+               method = "L-BFGS-B", lower = 1e-6, upper = Inf)$par
+    
+    # fix it back... no longer fix eta to be > 0
+    # eta = optim(eta_old, llfunc, llgrr, 
+    #             method = "L-BFGS-B", lower = 1, upper = Inf)$par
     
     ## hack it to truth if...
     if(hack_eta_phi){
@@ -1509,6 +1526,57 @@ get_expo_times <- function(manifest_times, G_all, tmax, tmin, report, times,
   names(res) = manifested
   res
 }
+
+# 12/13/2020: write a simpler version of the above function 
+# for easier debugging...
+get_expo_times_debug <- function(manifest_times, G_all, tmax, tmin, report, times,
+                           events, recovery_times, X, b_S = c(0,0),
+                           exp_eta=1.5, beta = 0.2, phi = 0.2, expo_truth=NULL){
+  
+  # manifest_times: list of manifest times
+  ## manifested: ids of people
+  ## times: time points
+  # X: the covar matrix (n by p)
+  # truth: a data frame of the true exposure times (ordered by ids in manifested)
+  
+  
+  manifested = manifest_times$manifested
+  #M = ifelse(length(manifested) > 100, length(manifested), 100)
+  #res = foreach(i=manifested, .combine = 'list', .maxcombine = M) %dopar% {
+  
+  # res = foreach(i=manifested, .combine = 'c') %dopar% {
+  #   
+  #   t_i = manifest_times$times[manifested == i]
+  #   x_i = X[i,]
+  #   get_expo_risk_i(i, t_i, G_all, tmax, tmin, report, times,
+  #                   events, recovery_times, x_i, b_S,
+  #                   exp_eta, beta, details = FALSE)
+  # }
+  
+  # get expo times one by one
+  # and also print truth if truth available
+  res = NULL
+  for(i in manifested){
+    cat('Person',i,': ')
+    t_i = manifest_times$times[manifested == i]
+    x_i = X[i,]
+    res_i = get_expo_risk_i(i, t_i, G_all, tmax, tmin, report, times,
+                            events, recovery_times, x_i, b_S,
+                            exp_eta, beta, details = FALSE)
+    res = c(res, res_i)
+    if(!is.null(expo_truth)){
+      truth_i = expo_truth$time[expo_truth$per1 == i]
+      cat('imputed exposure time=',res_i, '; truth =', truth_i,'\n')
+    }else{
+      cat('imputed exposure time=',res_i, '\n')
+    }
+    
+  }
+  # set name as person id
+  names(res) = manifested
+  res
+}
+
 
 ## try it out
 # ### get a manifested list first

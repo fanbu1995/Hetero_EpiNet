@@ -26,14 +26,27 @@
 # fixed a little bug in exposure time imputation code
 # and retry running stuff only with b_S = 0 fixed
 
+## 11/24/2020
+# try running stuff without any 0 fixing...
+
+## 11/29/2020
+# try running stuff (without fixing) on ex0 & 2-10 (where b_S = (0,-1))
+
+## 11/30/2020
+# try running new stuff (without fixing) where b_S = (0,1)
+# and see if beta gets over-estimated...
+
+## 12/13/2020
+# try running with eta fixed
+# and see if beta and b_S can be correctly handled
+
+# also: try fixing all recovery times to truth (but not anything else)
 
 library(ggplot2)
 
-source("inference_utils_1.R")
-
 # data directory and outdir
 data_root = 'hetero_data/'
-outdir = 'hetero_results11/'
+outdir = 'hetero_results17/'
 
 
 # server stuff, set seed and example data path
@@ -50,7 +63,7 @@ source("inference_utils_1.R")
 # defined functions
 ## complete data
 infer_complete_data <- function(fpath, maxIter=10, tol=1e-4, initEta = 1,
-                                hack0 = FALSE){
+                                hack0 = FALSE, hackb_S = FALSE){
   # fpath: folder name of data files under data_root
   # maxIter: max. iterations for the MLE optimization algorithms
   # tol: tolerance for MLE optimization algorithms
@@ -70,7 +83,8 @@ infer_complete_data <- function(fpath, maxIter=10, tol=1e-4, initEta = 1,
   summs = summarize_events2(G0, I0, events, stage_change)
   
   # get MLEs
-  estimates = solve_MLE(summs, X, maxIter, tol, initEta, hack0)
+  estimates = solve_MLE(summs, X, maxIter, tol, initEta, hack0=hack0, 
+                        hackb_S = hackb_S, true_b_S = truth$b_S)
   ## adjust "eta" names
   estimates[['exp_eta']] = estimates[['eta']]
   estimates[['eta']] = ifelse(estimates[['eta']] <= 0, Inf, log(estimates[['eta']]))
@@ -91,6 +105,9 @@ infer_complete_data <- function(fpath, maxIter=10, tol=1e-4, initEta = 1,
 ## 11/06/2020: 
 # 1. make things easier by starting at the truth of exp(eta) and gamma
 # 2. set a "fixed_prop" to fix a fraction of exposure times to truth
+
+## 12/13/2020
+# add a hack to fix recovery times at truth
 infer_partial_data <- function(fpath, interval = 7, 
                                miss_recov_prop = 1, miss_expo_prop = 1,
                                tmax = 7, tmin = 0,
@@ -100,7 +117,9 @@ infer_partial_data <- function(fpath, interval = 7,
                                initB_S = c(0,0),
                                seed=42, verbose=TRUE,
                                hack0 = FALSE, hack_eta_phi = FALSE,
-                               fix_expo_prop = 0){
+                               hackb_S = FALSE,
+                               fix_expo_prop = 0,
+                               fix_recovery = FALSE){
   
   # fpath: folder name of data files under data_root
   # miss_**_prop: missing proportion of recovery times and exposure times
@@ -114,7 +133,9 @@ infer_partial_data <- function(fpath, interval = 7,
   # initB_S: the initial b_S vector to use
   # hack0: whether or not to hack b_* coefficients to zero (default FALSE)
   # hack_eta_phi: whether or not to hack eta and phi to truth (default FALSE)
+  # hack_b_S: whether or not to hack b_S to truth (default FALSE)
   # fix_expo_prop: proportion of exposure times to fix to truth (default 0)
+  # fix_recovery: whether or not to hack recovery times to truth (default FALSE)
   
   set.seed(seed)
   
@@ -176,6 +197,25 @@ infer_partial_data <- function(fpath, interval = 7,
     recovery_times = rbind(recovery_times, recov_r)
   }
   
+  # 12/13/2020: fix recovery times to truth if...
+  if(fix_recovery){
+    # get the truth
+    true_recovery_times = events.orig %>% 
+      filter(event == 2) %>%
+      select(recov = per1, time)
+    
+    # order the truth by the order of people ids in "MR"
+    proxy_recovery_times = NULL
+    for(r in 1:nrow(MR$intervals)){
+      true_r = true_recovery_times %>%
+        filter(time < MR$intervals$ub[r] & time > MR$intervals$lb[r]) %>%
+        arrange(recov)
+      proxy_recovery_times = rbind(proxy_recovery_times, true_r)
+    }
+    
+    recovery_times = proxy_recovery_times
+  }
+  
   # start iterating...
   
   ## current values of exp_eta and gam
@@ -234,14 +274,21 @@ infer_partial_data <- function(fpath, interval = 7,
     #   recovs = MR$recover[[r]]
     #   propose_recov_filter(lb, ub, recovs, exposure_times, infec_nei, gam, exp_eta)
     # }
-    recov_times = NULL
-    for(r in 1:nrow(MR$intervals)){
-      lb = MR$intervals$lb[r]; ub = MR$intervals$ub[r]
-      recovs = MR$recover[[r]]
-      cands = propose_recov_filter(lb, ub, recovs, exposure_times, infec_nei, gam, exp_eta)
-      recov_times = c(recov_times, cands)
+    
+    # 12/13/2020...
+    # allow fixing recovery times to truth
+    if(fix_recovery){
+      recovery_times = proxy_recovery_times
+    }else{
+      recov_times = NULL
+      for(r in 1:nrow(MR$intervals)){
+        lb = MR$intervals$lb[r]; ub = MR$intervals$ub[r]
+        recovs = MR$recover[[r]]
+        cands = propose_recov_filter(lb, ub, recovs, exposure_times, infec_nei, gam, exp_eta)
+        recov_times = c(recov_times, cands)
+      }
+      recovery_times$time = recov_times
     }
-    recovery_times$time = recov_times
     
     if(verbose){cat('Recovery times imputation done!\n')}
     
@@ -254,7 +301,8 @@ infer_partial_data <- function(fpath, interval = 7,
     # 4) get MLEs
     ## 11/06/2020 update with hacked eta and phi included
     estimates = solve_MLE(summs, X, maxIter, tol, initEta, 
-                          hack0, hack_eta_phi, truth$exp_eta, truth$phi)
+                          hack0, hack_eta_phi, hackb_S,
+                          truth$exp_eta, truth$phi, truth$b_S)
     ## adjust "eta" names
     estimates[['exp_eta']] = estimates[['eta']]
     estimates[['eta']] = ifelse(estimates[['eta']] <= 0, -Inf, log(estimates[['eta']]))
@@ -312,7 +360,7 @@ infer_partial_data <- function(fpath, interval = 7,
 plot_estimates <- function(res, trace=TRUE){
   # res: a combined list of both MLEs (complete data) and stoch. EM
   
-  varnames = names(comp_res$estimates)
+  varnames = names(res$truth)
   
   MLEs = res$MLE
   params = res$params
@@ -358,7 +406,9 @@ plot_estimates <- function(res, trace=TRUE){
 # inference and plot
 
 ## 10/31/2020 more change: hack0 = TRUE to focus on main parameters
-hh = TRUE
+
+## 11/24/2020: no longer fixing hh, and see how that works
+hh = FALSE
 
 ## 11/06/2020 change: hack_eta_phi = TRUE to focus on beta only
 ## then set it back...
@@ -366,11 +416,23 @@ hh = TRUE
 ## 11/10/2020: fix everything again and focus on beta only
 ## to test out the new imputation algorithm
 ## (11/11/2020: set it back)
+
+
+## 12/01/2020: fix b_S to truth and see if things work fine
+## trying to get at why the regression part works weird
+
+## 12/13/2020: only fix eta but not b_S and see what happens
+
 hep = FALSE
+
+hbS = FALSE
+
+## 12/13/2020: fix recovery times
+fre = TRUE
 
 ## complete data results (MLE)
 comp_res = infer_complete_data(sub_dir, maxIter = 50, tol = 1e-6, 
-                               initEta = 1.5, hack0 = hh)
+                               initEta = 1.5, hack0 = hh, hackb_S = hbS)
 
 ## partial data
 
@@ -387,7 +449,9 @@ comp_res = infer_complete_data(sub_dir, maxIter = 50, tol = 1e-6,
 # 1. fix eta and phi and only focus on beta estimation
 # 2. set some fraction of expo times to truth and see what happens
 
-REP = 5
+# repeat less to run faster
+
+REP = 3
 
 ## set initial beta according to dataset
 i_beta = ifelse(s0%%2 == 0, 0.2, 0.15)
@@ -397,7 +461,7 @@ pdfpath = paste0(outdir,"res_",sub_dir,".pdf")
 pdf(pdfpath, width = 8, height = 6)
 
 for(rep in 1:REP){
-  this.seed = ss + rep*131 %% 17
+  this.seed = ss + rep*1453 %% 41
   #fep = rep/5
   fep = 0
   part_res = infer_partial_data(sub_dir, interval = 7, tmax=50, 
@@ -406,7 +470,9 @@ for(rep in 1:REP){
                                 maxIter = 50, seed = this.seed,
                                 initBeta = i_beta,
                                 hack0 = hh, hack_eta_phi = hep,
-                                fix_expo_prop = fep)
+                                hackb_S = hbS,
+                                fix_expo_prop = fep, 
+                                fix_recovery = fre)
   
   ## save results
   part_res$MLE = comp_res$estimates
