@@ -698,7 +698,8 @@ sum_covariates <- function(p, X){
 }
 
 solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1, 
-                      hack0=FALSE, hack_eta_phi = FALSE, hackb_S = FALSE,
+                      hack0=FALSE, hackb_S = FALSE,
+                      hack_eta = FALSE, hack_phi = FALSE,
                       true_Eta = NULL, true_phi = NULL, true_b_S = c(0,1)){
   
   # 10/31/2020:
@@ -714,6 +715,9 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1,
   # add hackb_S mode
   # set b_S to the truth and see if we can get beta and eta right
   # ALSO try to restrict exp_eta > 1
+  
+  # 01/26/2021
+  # modify to "hack_eta" and "hack_phi" mode
   
   # X has to be a dataframe with column names!!
   
@@ -742,7 +746,7 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1,
   phi = (nIs + nIa)/sum(epi_table$latent_time)
   p_s = nIs/(nIs + nIa)
   
-  if(hack_eta_phi){
+  if(hack_phi){
     phi = true_phi
   }
   
@@ -818,7 +822,7 @@ solve_MLE <- function(summaries, X, maxIter=10, tol=1e-4, initEta = 1,
     #             method = "L-BFGS-B", lower = 1, upper = Inf)$par
     
     ## hack it to truth if...
-    if(hack_eta_phi){
+    if(hack_eta){
       eta = true_Eta
     }
     
@@ -1262,13 +1266,14 @@ get_expo_risk_i <- function(i, t_i, G_all, tmax, tmin, report, times,
   # t_i: manifestation time of i
   # G_all: all adjmats at report times
   # recovery_times: a data frame of imputed recovery times (no need to be sorted)
-  # details: if TRUE, return all stuff; o.w., return sampled expo time only
   
   # x_i: i's covar vector
   # b_S: current value of b_S
   # exp_eta: current value of exp(eta)
   # beta: current value of beta
   # phi: current value of phi
+  
+  # details: if TRUE, return all stuff; o.w., return sampled expo time only
   
   st = max(0,t_i - tmax)
   en = ifelse(t_i - tmin <= 0, t_i, t_i - tmin)
@@ -1292,6 +1297,7 @@ get_expo_risk_i <- function(i, t_i, G_all, tmax, tmin, report, times,
   events = events %>% filter(time >= lb & time <= en) %>% 
     filter(per1 == i | per2 == i | event %in% c(9,10))
   
+  # get people recovered before st
   recovered_before_st = recovery_times %>%
     filter(time >= lb & time <= st) %>%
     select(recov) %>% pull()
@@ -1300,12 +1306,13 @@ get_expo_risk_i <- function(i, t_i, G_all, tmax, tmin, report, times,
   #   filter(time > st & time <= en) %>%
   #   select(time=times, per1=recov)
   
+  # get recovery events in (st,en]
   recovery_times = recovery_times %>% 
     filter(time > st & time <= en) %>%
     mutate(event=2, per2 = NA) %>%
     select(time, event, per1=recov, per2)
   
-  # combine events with recovery_times
+  # combine events with recovery_times and rank by time
   events = rbind(events, recovery_times) %>% 
     arrange(time)
   

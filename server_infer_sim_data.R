@@ -42,11 +42,23 @@
 
 # also: try fixing all recovery times to truth (but not anything else)
 
+## 02/24/2020:
+# try with X[,2] = rnorm(N,sd=0.5)
+# AND b_S = (1,1)
+
 library(ggplot2)
 
 # data directory and outdir
 data_root = 'hetero_data/'
-outdir = 'hetero_results17/'
+#outdir = 'hetero_results17/'
+
+# 01/26/2021
+# change outdir to new dir
+# outdir = 'fix_some4/'
+
+# 02/24/2021
+# change outdir again
+outdir = 'new_setting0/'
 
 
 # server stuff, set seed and example data path
@@ -116,7 +128,8 @@ infer_partial_data <- function(fpath, interval = 7,
                                initBeta = 0.2, initPhi = 0.2,
                                initB_S = c(0,0),
                                seed=42, verbose=TRUE,
-                               hack0 = FALSE, hack_eta_phi = FALSE,
+                               hack0 = FALSE, hack_eta = FALSE,
+                               hack_phi = FALSE,
                                hackb_S = FALSE,
                                fix_expo_prop = 0,
                                fix_recovery = FALSE){
@@ -132,7 +145,8 @@ infer_partial_data <- function(fpath, interval = 7,
   # initBeta: the initial beta value to use
   # initB_S: the initial b_S vector to use
   # hack0: whether or not to hack b_* coefficients to zero (default FALSE)
-  # hack_eta_phi: whether or not to hack eta and phi to truth (default FALSE)
+  # hack_eta: whether or not to hack eta to truth (default FALSE)
+  # hack_phi: whether or not to hack phi to truth (default FALSE)
   # hack_b_S: whether or not to hack b_S to truth (default FALSE)
   # fix_expo_prop: proportion of exposure times to fix to truth (default 0)
   # fix_recovery: whether or not to hack recovery times to truth (default FALSE)
@@ -301,7 +315,7 @@ infer_partial_data <- function(fpath, interval = 7,
     # 4) get MLEs
     ## 11/06/2020 update with hacked eta and phi included
     estimates = solve_MLE(summs, X, maxIter, tol, initEta, 
-                          hack0, hack_eta_phi, hackb_S,
+                          hack0, hackb_S, hack_eta, hack_phi, 
                           truth$exp_eta, truth$phi, truth$b_S)
     ## adjust "eta" names
     estimates[['exp_eta']] = estimates[['eta']]
@@ -357,14 +371,23 @@ infer_partial_data <- function(fpath, interval = 7,
 
 ## plot inference results
 ## 11/01/2020: add traceplot as well
-plot_estimates <- function(res, trace=TRUE){
+
+## 01/04/2021
+## optional plotting of truth and MLE
+plot_estimates <- function(res, trace=TRUE, truthMLE = TRUE){
   # res: a combined list of both MLEs (complete data) and stoch. EM
+  # trace: whether or not to include traceplot
+  # truthMLE: whether or not there exists (or to include) truth and MLE estimates
   
-  varnames = names(res$truth)
+  varnames = names(res$means)
   
-  MLEs = res$MLE
   params = res$params
-  truth = res$truth
+  
+  if(truthMLE){
+    MLEs = res$MLE
+    truth = res$truth
+  }
+  
   
   for(v in varnames){
     if(length(grep('(omega)|(alpha)|S|s',v)) == 0){
@@ -372,27 +395,49 @@ plot_estimates <- function(res, trace=TRUE){
       # also: don't plot p_s either, since this is always the same as MLE estimate
       # then plot everything else
       pdat = tibble(val = params[[v]])
-      ptruth = truth[[v]]
-      print(
-        ggplot(pdat, aes(x=val)) + 
-          geom_histogram(bins = 10, fill='skyblue') +
-          geom_vline(xintercept = truth[[v]], size=1.5, color='red') +
-          geom_vline(xintercept = MLEs[[v]], size=1.5, color='black') +
-          labs(x=v) +
-          theme_bw()
-      )
+      if(truthMLE){
+        print(
+          ggplot(pdat, aes(x=val)) + 
+            geom_histogram(bins = 10, fill='skyblue') +
+            geom_vline(xintercept = truth[[v]], size=1.5, color='red') +
+            geom_vline(xintercept = MLEs[[v]], size=1.5, color='black') +
+            labs(x=v) +
+            theme_bw()
+        )
+      }else{
+        print(
+          ggplot(pdat, aes(x=val)) + 
+            geom_histogram(bins = 10, fill='skyblue') +
+            #geom_vline(xintercept = truth[[v]], size=1.5, color='red') +
+            #geom_vline(xintercept = MLEs[[v]], size=1.5, color='black') +
+            labs(x=v) +
+            theme_bw()
+        )
+      }
+      
       
       # add traceplot if...
       if(trace){
         pdat = pdat %>% mutate(samp = 1:n())
-        print(
-          ggplot(pdat, aes(y=val,x=samp)) + 
-            geom_hline(yintercept = truth[[v]], size=1.5, color='red') +
-            geom_hline(yintercept = MLEs[[v]], size=1.5, color='darkgray') +
-            geom_line(size=0.3)+
-            labs(y=v, x='iteration') +
-            theme_bw()
-        )
+        if(truthMLE){
+          print(
+            ggplot(pdat, aes(y=val,x=samp)) + 
+              geom_hline(yintercept = truth[[v]], size=1.5, color='red') +
+              geom_hline(yintercept = MLEs[[v]], size=1.5, color='darkgray') +
+              geom_line(size=0.3)+
+              labs(y=v, x='iteration') +
+              theme_bw()
+            )
+        }else{
+          print(
+            ggplot(pdat, aes(y=val,x=samp)) + 
+              #geom_hline(yintercept = truth[[v]], size=1.5, color='red') +
+              #geom_hline(yintercept = MLEs[[v]], size=1.5, color='darkgray') +
+              geom_line(size=0.3)+
+              labs(y=v, x='iteration') +
+              theme_bw()
+          )
+        }
       }
       
     }
@@ -428,7 +473,8 @@ hep = FALSE
 hbS = FALSE
 
 ## 12/13/2020: fix recovery times
-fre = TRUE
+fre = FALSE
+
 
 ## complete data results (MLE)
 comp_res = infer_complete_data(sub_dir, maxIter = 50, tol = 1e-6, 
@@ -449,27 +495,55 @@ comp_res = infer_complete_data(sub_dir, maxIter = 50, tol = 1e-6,
 # 1. fix eta and phi and only focus on beta estimation
 # 2. set some fraction of expo times to truth and see what happens
 
-# repeat less to run faster
+## 01/26/2021:
+## fix the following params:
+## "fix_some_*"
+# 1. phi
+# 2. eta
+# 3. b_S
+# 4. eta + b_S
 
-REP = 3
+# hp = FALSE
+# he = TRUE
+# hbS = TRUE
+# 
+# f1 = 1361
+# f2 = 53
+
+
+## 02/24/2021
+# try again with b_S = (1,1) and X[,2] = Normal(0,0.5)
+hp = FALSE
+he = FALSE
+hbS = FALSE
+
+f1 = 1361
+f2 = 53
+
+REP = 5
 
 ## set initial beta according to dataset
 i_beta = ifelse(s0%%2 == 0, 0.2, 0.15)
+
+## 02/24/2021: no need to have different betas
+## (for ex31-40: all N=200 and beta=0.15)
+i_beta = 0.15
 
 ## plot things together
 pdfpath = paste0(outdir,"res_",sub_dir,".pdf")
 pdf(pdfpath, width = 8, height = 6)
 
 for(rep in 1:REP){
-  this.seed = ss + rep*1453 %% 41
+  this.seed = ss + rep*f1 %% f2
   #fep = rep/5
   fep = 0
   part_res = infer_partial_data(sub_dir, interval = 7, tmax=50, 
                                 tmin = 0,
-                                numIter = 150, burn = 50,
-                                maxIter = 50, seed = this.seed,
+                                numIter = 100, burn = 50,
+                                maxIter = 30, seed = this.seed,
                                 initBeta = i_beta,
-                                hack0 = hh, hack_eta_phi = hep,
+                                hack0 = hh, hack_eta = he,
+                                hack_phi = hp,
                                 hackb_S = hbS,
                                 fix_expo_prop = fep, 
                                 fix_recovery = fre)

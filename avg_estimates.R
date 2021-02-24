@@ -9,6 +9,7 @@
 
 library(tidyverse)
 library(stringr)
+library(xtable)
 
 setwd('~/Documents/Research_and_References/Hetero_EpiNet_2020/hetero_results11/')
 
@@ -24,6 +25,7 @@ str_detect(all_files, '_ex11')
 # for certain parameters
 # over select results
 # 12/13/2020: also check the MLE estimates (from complete data)
+
 get_avg_est <- function(path, datasets, 
                         params=c('beta','phi','gamma','p_s','b_S'),
                         b_dim = 2){
@@ -89,6 +91,41 @@ get_avg_est <- function(path, datasets,
   summ_dat
 }
 
+
+# 12/21/2020: calculate error for multi-dim parameters
+get_mle_errors <- function(path, datasets, 
+                           params = c('b_S', 'alpha', 'omega')){
+  fpath = file.path(root, path)
+  all_files = list.files(path = fpath)
+  
+  res_files = all_files[str_detect(all_files, '.rds')]
+  
+  # list of errors
+  error_ll = list()
+  for(p in params){
+    error_ll[[p]] = numeric(0)
+  }
+  
+  # go through datasets
+  for(d in datasets){
+    d_files = res_files[str_detect(res_files, d)]
+    for(f in d_files){
+      res = readRDS(file.path(root, path, f))
+      for(p in params){
+        error_ll[[p]] = c(error_ll[[p]], res$MLE_errors[[p]])
+      }
+    }
+  }
+  
+  # compile dataframe
+  error_dat = as.data.frame(error_ll)
+  summ = t(apply(error_dat, 2, function(v) c(mean(v), sd(v))))
+  summ_dat = as.data.frame(summ)
+  names(summ_dat) = c('Avg. MAE', 'SD')
+  
+  summ_dat
+}
+
 ## another function to peek at the ground truth of example datasets
 peek_truth <- function(path, datasets, 
                        params=c('beta')){
@@ -117,7 +154,8 @@ summ2 = get_avg_est('hetero_results11', c('ex11','ex15','ex17','ex19'))
 # 11/29/2020
 # look at hetero_results12 results
 summ1 = get_avg_est('hetero_results12', 
-                    c('ex12','ex14', 'ex16', 'ex18', 'ex20'))
+                    c('ex12','ex14', 'ex16', 'ex18', 'ex20'),
+                    params = c('beta','phi','gamma','p_s','b_S','eta'))
 summ1
 
 library(xtable)
@@ -157,7 +195,7 @@ summ4 = get_avg_est('hetero_results15',
 # 12/13/2020
 # check out hetero_results14 results (with MLEs)
 summ3 = get_avg_est('hetero_results14', 
-                    paste0('ex', seq(from=22,to=30, by=2)),
+                    paste0('ex', seq(from=21,to=30, by=2)),
                     params = c('beta','phi','gamma','p_s','b_S','eta'))
 
 peek_truth('hetero_results14', 
@@ -181,9 +219,9 @@ summ5 = get_avg_est('hetero_results16',
 
 
 # check out hetero_results17 (fix recovery times to truth)
-summ6 = get_avg_est('hetero_results17', 
+summ7 = get_avg_est('hetero_results17', 
                     paste0('ex', seq(from=22,to=30, by=2)),
-                    params = c('beta', 'gamma','p_s','b_S'))
+                    params = c('beta', 'eta', 'phi', 'gamma','p_s','b_S'))
 
 
 ## 11/29/2020
@@ -191,5 +229,10 @@ summ6 = get_avg_est('hetero_results17',
 peek_truth('hetero_results3', paste0('ex',1:9), params=c('beta','b_S'))
 
 
+# 12/21/2020
+# check out MLE errors
+summ6 = get_mle_errors('hetero_results17', 
+                       paste0('ex', seq(from=22,to=30, by=2)))
 
+peek_truth('hetero_results17', 'ex22', params = c('beta','omega', 'alpha'))
 

@@ -600,6 +600,8 @@ if __name__ == '__main__':
     
 #%%
 # a function to generate full simulation data, save all info to a specified directory for R use
+
+# Feb 2021 change: X matrix has a continuous column, instead of 2 0-1 columns...
     
 def simulateData(params, N, p0, T, phase_bounds, Xp = 2, 
                  savepath='/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/', dirname = 'ex1',
@@ -618,7 +620,11 @@ def simulateData(params, N, p0, T, phase_bounds, Xp = 2,
     np.random.seed(seed)
 
     # generate X matrix
-    X = np.random.randint(2, size=(N,Xp))
+    #X = np.random.randint(2, size=(N,Xp))
+    
+    # Feb 2021 change: replace the 2nd column with Normal(0,0.5) r.v.s
+    X = np.random.normal(scale=0.5, size=(N,Xp))
+    X[:,0] = np.random.randint(2,size=N)
     
     # initialize object
     EpiNet = HeteroEpiNet(N, phase_bounds, X)
@@ -791,5 +797,38 @@ if __name__ == '__main__':
                      dirname = dirname,
                      seed=s0)
         
+#%%
+        
+# Feb 2021: try
+# (1) b_S = [1,1]
+# (2) X[:,1] = normal(0,0.5) r.v.s
         
 
+if __name__ == '__main__':
+    
+    # set network regression coefs = 0 for now...
+    # generate 10 datasets
+    # set N = 200 for all datasets
+    
+    N_dat = 10
+    st = 31 # start from 31...
+    
+    for i in range(st,N_dat+st): 
+        s0 = i+147
+        dirname = 'ex'+str(i)
+        
+        N = 200; p0 = 0.05; tmax = 50; stage_change = [20,50]
+        pa = {'beta': 0.15, 'eta': 0.2, 'gamma': 0.1, 
+              'phi': 0.2, 'p_s': 0.6,
+              'alpha':[np.array([0.0006,0.0006,0.0006]), np.array([0.0006,0.0002,0.0006])],
+              'omega':[np.array([0.005,0.005,0.005]), np.array([0.005,0.05,0.005])],
+              'b_S': np.array([1,1]),
+              'b_alpha': np.array([0,0]),
+              'b_omega': np.array([0,0])}
+        
+        simulateData(pa, N, p0, tmax, stage_change, Xp = 2, 
+                     savepath='/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/', 
+                     dirname = dirname,
+                     seed=s0)
+        
+            
