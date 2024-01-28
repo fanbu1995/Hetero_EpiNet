@@ -1,67 +1,13 @@
-# 10/24/2020
-# run simulation data inference code on server
-
-# 08/16/2021
-# track the acceptance ratio of the rejection sampler
-
-# 10/31/2020
-# add a "hack0" mode:
-# if TRUE, manually fix b_* = 0
-# to focus on the main parameters
-
-# 11/02/2020:
-# try to force longer latency by setting tmin = 5...
-
-## 11/06/2020 more attempt:
-# 1. fix eta and phi and only focus on beta estimation
-# 2. set some fraction of expo times to truth and see what happens
-
-## 11/08/2020:
-# try fixing the expo time imputation algorithm, and
-# 1. still with hack0 = TRUE, just run stuff
-# 2. set some fraction of expo times to truth
-
-## 11/10/2020
-# fix eta, phi, etc. and only focus on beta again
-# to test out imputation algorithm
-
-## 11/11/2020
-# fixed a little bug in exposure time imputation code
-# and retry running stuff only with b_S = 0 fixed
-
-## 11/24/2020
-# try running stuff without any 0 fixing...
-
-## 11/29/2020
-# try running stuff (without fixing) on ex0 & 2-10 (where b_S = (0,-1))
-
-## 11/30/2020
-# try running new stuff (without fixing) where b_S = (0,1)
-# and see if beta gets over-estimated...
-
-## 12/13/2020
-# try running with eta fixed
-# and see if beta and b_S can be correctly handled
-
-# also: try fixing all recovery times to truth (but not anything else)
-
-## 02/24/2020:
-# try with X[,2] = rnorm(N,sd=0.5)
-# AND b_S = (1,1)
+# 04/21/2021
+# script for coverage study (with varariance estimation for the simulated data)
 
 library(ggplot2)
 
 # data directory and outdir
 data_root = 'hetero_data/'
-#outdir = 'hetero_results17/'
 
-# 01/26/2021
-# change outdir to new dir
-# outdir = 'fix_some4/'
-
-# 02/24/2021
-# change outdir again
-outdir = 'new_setting0/'
+# out dir
+outdir = 'hetero_coverage/'
 
 
 # server stuff, set seed and example data path
@@ -70,12 +16,20 @@ s0 = as.numeric(slurm_arrayid)
 set.seed(s0)
 ss = sample(1000,1)
 
-sub_dir = paste0('ex',s0-1)
+# only do those N=200 datasets
+inds = c(seq(from=1,to=31,by=2), 32:41, 101:124)
+
+# 10 reps in 10 separate groups for each dataset
+da = ((s0-1) %/% 10) + 1
+gr = (s0-1) %% 10
+
+datname = inds[da]
+cat('Working on dataset', datname, '...\n')
+
+sub_dir = paste0('ex',datname)
 
 # source the inference util funcs
-source("inference_utils_1.R")
-
-# 08/16/2021: new utils
+# (updated version)
 source("inference_utils_3.R")
 
 # defined functions
@@ -126,6 +80,9 @@ infer_complete_data <- function(fpath, maxIter=10, tol=1e-4, initEta = 1,
 
 ## 12/13/2020
 # add a hack to fix recovery times at truth
+
+## 04/21/2021
+# add storage for estimating asymptotic variances for the parameters
 infer_partial_data <- function(fpath, interval = 7, 
                                miss_recov_prop = 1, miss_expo_prop = 1,
                                tmax = 7, tmin = 0,
@@ -138,8 +95,7 @@ infer_partial_data <- function(fpath, interval = 7,
                                hack_phi = FALSE,
                                hackb_S = FALSE,
                                fix_expo_prop = 0,
-                               fix_recovery = FALSE,
-                               track_accept = TRUE){
+                               fix_recovery = FALSE){
   
   # fpath: folder name of data files under data_root
   # miss_**_prop: missing proportion of recovery times and exposure times
@@ -157,7 +113,6 @@ infer_partial_data <- function(fpath, interval = 7,
   # hack_b_S: whether or not to hack b_S to truth (default FALSE)
   # fix_expo_prop: proportion of exposure times to fix to truth (default 0)
   # fix_recovery: whether or not to hack recovery times to truth (default FALSE)
-  # track_accept: if track the acceptance ratios for expo time rejection sampler
   
   set.seed(seed)
   
@@ -260,8 +215,16 @@ infer_partial_data <- function(fpath, interval = 7,
     }
   }
   
-  # 08/16/2021: track acceptance ratio for rejection sampler
-  accepts = NULL
+  # 03/24/2021: storage for the simulated Expo_Ia's and Expo_Is's
+  Expo_Ias = matrix(0, nrow=nsamps, ncol = nrow(X))
+  Expo_Iss = matrix(0, nrow=nsamps, ncol = nrow(X))
+  
+  # 03/30/2021: storage for other stuff
+  Ia_tis = matrix(0, nrow=nsamps, ncol = nrow(X))
+  Is_tis = matrix(0, nrow=nsamps, ncol = nrow(X))
+  sum_latent = numeric(nsamps)
+  sum_sick = numeric(nsamps)
+  
   for(s in 1:numIter){
     if(verbose){cat('Iteration',s,'...')}
     
@@ -269,16 +232,7 @@ infer_partial_data <- function(fpath, interval = 7,
     imp_expo_times = get_expo_times(manifest, G_all, tmax, tmin, 
                                     miss_dat$report, miss_dat$report.times, 
                                     events, recovery_times, X, b_S,
-                                    exp_eta, beta, phi, track_accept)
-    if(track_accept){
-      accepts_s = imp_expo_times$accepts
-      if(s==1){
-        accepts = accepts_s
-      }else{
-        accepts = accepts + accepts_s
-      }
-      imp_expo_times = imp_expo_times$res
-    }
+                                    exp_eta, beta, phi)
     
     ## fix some of them to the truth if...
     if(fix_expo_prop > 0){
@@ -330,6 +284,18 @@ infer_partial_data <- function(fpath, interval = 7,
     summs = summarize_events2(G0, I0, events_aug, stage_change)
     
     if(verbose){cat('Summarizing events done!')}
+    
+    # 03/24/2021: save the simulated Expo's (after burn-in)
+    # 03/30/2021: also save other stuff for variance estimation
+    if(s > burn){
+      Expo_Ias[s-burn,] = summs$epi_table$Ia_expo
+      Expo_Iss[s-burn,] = summs$epi_table$Is_expo
+      Ia_tis[s-burn,] = summs$epi_table$Ia_ti
+      Is_tis[s-burn,] = summs$epi_table$Is_ti
+      sum_latent[s-burn] = sum(summs$epi_table$latent_time)
+      sum_sick[s-burn] = sum(summs$epi_table$sick_time)
+    }
+    
     
     # 4) get MLEs
     ## 11/06/2020 update with hacked eta and phi included
@@ -384,7 +350,11 @@ infer_partial_data <- function(fpath, interval = 7,
     }
   }
   
-  list(params = params, means=means, truth = truth, accepts = accepts)
+  list(params = params, means=means, truth=truth, 
+       Expo_Ias = Expo_Ias, Expo_Iss = Expo_Iss, 
+       Ia_tis = Ia_tis, Is_tis = Is_tis, 
+       sum_latent = sum_latent, sum_sick = sum_sick,
+       counts = summs$counts, X = X)
 }
 
 
@@ -446,7 +416,7 @@ plot_estimates <- function(res, trace=TRUE, truthMLE = TRUE){
               geom_line(size=0.3)+
               labs(y=v, x='iteration') +
               theme_bw()
-            )
+          )
         }else{
           print(
             ggplot(pdat, aes(y=val,x=samp)) + 
@@ -467,90 +437,27 @@ plot_estimates <- function(res, trace=TRUE, truthMLE = TRUE){
 
 
 
-# inference and plot
-
-## 10/31/2020 more change: hack0 = TRUE to focus on main parameters
-
-## 11/24/2020: no longer fixing hh, and see how that works
-hh = FALSE
-
-## 11/06/2020 change: hack_eta_phi = TRUE to focus on beta only
-## then set it back...
-
-## 11/10/2020: fix everything again and focus on beta only
-## to test out the new imputation algorithm
-## (11/11/2020: set it back)
-
-
-## 12/01/2020: fix b_S to truth and see if things work fine
-## trying to get at why the regression part works weird
-
-## 12/13/2020: only fix eta but not b_S and see what happens
-
-hep = FALSE
-
-hbS = FALSE
-
-## 12/13/2020: fix recovery times
-fre = FALSE
+# inference and save results
 
 
 ## complete data results (MLE)
 comp_res = infer_complete_data(sub_dir, maxIter = 50, tol = 1e-6, 
-                               initEta = 1.5, hack0 = hh, hackb_S = hbS)
+                               initEta = 1.5, hack0 = FALSE, 
+                               hackb_S = FALSE)
 
 ## partial data
+## (no longer make plots... only save the results)
 
-## 10/31/2020 change: 
-# 1. burn-in 100 iters and only take last 100 samples...
-# 2. increase "tmax" to 50 (so expo time imputation window will be all the history!)
-# 3. try 5 different seeds (thus expo time imputation will start at different spots)
+i_beta = 0.15
 
-## 11/01/2020 more attempt:
-# set tmin = 1, to force longer latency...
-# (this is reversed in later experiments)
-
-## 11/06/2020 more attempt:
-# 1. fix eta and phi and only focus on beta estimation
-# 2. set some fraction of expo times to truth and see what happens
-
-## 01/26/2021:
-## fix the following params:
-## "fix_some_*"
-# 1. phi
-# 2. eta
-# 3. b_S
-# 4. eta + b_S
-
-# hp = FALSE
-# he = TRUE
-# hbS = TRUE
-# 
-# f1 = 1361
-# f2 = 53
-
-
-## 02/24/2021
-# try again with b_S = (1,1) and X[,2] = Normal(0,0.5)
-hp = FALSE
-he = FALSE
-hbS = FALSE
+REP = 10
 
 f1 = 1361
 f2 = 53
 
-REP = 5
-
-## set initial beta according to dataset
-i_beta = ifelse(s0%%2 == 0, 0.2, 0.15)
-
-## 02/24/2021: no need to have different betas
-## (for ex31-40: all N=200 and beta=0.15)
-i_beta = 0.15
-
 ## plot things together
-pdfpath = paste0(outdir,"res_",sub_dir,".pdf")
-pdf(pdfpath, width = 8, height = 6)
+#pdfpath = paste0(outdir,"res_",sub_dir,".pdf")
+#pdf(pdfpath, width = 8, height = 6)
 
 for(rep in 1:REP){
   this.seed = ss + rep*f1 %% f2
@@ -561,43 +468,22 @@ for(rep in 1:REP){
                                 numIter = 100, burn = 50,
                                 maxIter = 30, seed = this.seed,
                                 initBeta = i_beta,
-                                hack0 = hh, hack_eta = he,
-                                hack_phi = hp,
-                                hackb_S = hbS,
+                                hack0 = FALSE, hack_eta = FALSE,
+                                hack_phi = FALSE,
+                                hackb_S = FALSE,
                                 fix_expo_prop = fep, 
-                                fix_recovery = fre)
+                                fix_recovery = 0)
   
   ## save results
   part_res$MLE = comp_res$estimates
   part_res$MLE_errors = comp_res$errors
-  savepath = paste0(outdir,"_",sub_dir,"_",rep,".rds")
+  
+  real_rep = gr * 10 + rep
+  savepath = paste0(outdir,sub_dir,"_",real_rep,".rds")
   saveRDS(part_res, file=savepath)
   
   ## plot this repetition result
-  plot_estimates(part_res)
+  # plot_estimates(part_res)
 }
 
-
-###### not run on server!! ########
-# 08/16/2021
-data_root = "~/Documents/Research_and_References/Hetero_EpiNet_2020"
-
-dats = paste0('ex', c(31:40))
-sub_dir = 'ex40'
-
-part_res40 = infer_partial_data(sub_dir, interval = 7, tmax=50, 
-                              tmin = 0,
-                              numIter = 50, burn = 20,
-                              maxIter = 20, seed = 73,
-                              initBeta = 0.15,
-                              track_accept = TRUE)
-
-sub_dir = 'ex101'
-part_res101 = infer_partial_data(sub_dir, interval = 7, tmax=50, 
-                                tmin = 0,
-                                numIter = 50, burn = 20,
-                                maxIter = 20, seed = 41,
-                                initBeta = 0.15,
-                                track_accept = TRUE)
-
-
+# dev.off()

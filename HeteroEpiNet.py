@@ -189,7 +189,10 @@ class HeteroEpiNet:
             self.omega = params['omega']
             self.b_S = params['b_S']
             self.b_alpha = params['b_alpha']
-            self.b_omega = params['b_omega']
+            self.b_omega = params['b_omega']   
+            self.xi = params['xi'] if "xi" in params.keys() else 0.0
+            self.b_E = params['b_E'] if "b_E" in params.keys() else np.zeros(len(self.b_S))
+            
         
         # set up fixed quantities
         ## infection (a column vector)
@@ -253,6 +256,13 @@ class HeteroEpiNet:
             ## CHANGE 09/20/2020: recover asymptomatic AND symptomatic
             ## (assume Ia and Is recover at the same rate)
             tot_recover_rate = np.sum(self.epid>=1) * self.gamma
+            
+            ## UPDATE 01/04/2024
+            # 1.0.* add an external infection rate
+            ## (directly from S to Ia/Is)
+            ext_infec_vec = self.xi * np.exp(self.X.dot(self.b_E)).reshape((self.N,))
+            ext_infec_vec[self.epid != 0] = 0
+            ext_infec_rate = ext_infec_vec.sum()
             
             ## deal with the T0 and T1 stages
             if self.T1st <= t_cur and t_cur < self.T1en:
@@ -355,16 +365,22 @@ class HeteroEpiNet:
 #            t_delta = exponential(scale=1/tot_rate)
             
             # CHANGE: add manifestation 09/20/2020
+            # UPDATE: add external infection rate 01/04/2024
             tot_rate = tot_infec_rate + tot_recover_rate + tot_acti_rate + tot_termi_rate + tot_manifest_rate
+            tot_rate += ext_infec_rate
+            
             t_delta = exponential(scale=1/tot_rate)
             
             t_next = t_cur + t_delta
             
             # 3. sample next event type
             # CHANGE: add manifestation 09/20/2020
+            # UPDATE: add external infection rate 01/04/2024
             probs = np.array([tot_infec_rate, tot_recover_rate, tot_acti_rate, 
-                              tot_termi_rate, tot_manifest_rate])/tot_rate
-            event_type = choice(range(5), p=probs)
+                              tot_termi_rate, tot_manifest_rate, ext_infec_rate])/tot_rate
+            
+            event_type = choice(range(6), p=probs)
+            
             
             if event_type == 0:
                 # infection (EXPOSURE):
@@ -420,6 +436,32 @@ class HeteroEpiNet:
                 event_log['event'].append(event_label)
                 event_log['p1'].append(p1)
                 event_log['p2'].append(p2)
+                
+            elif event_type == 5:
+                # external symptom onset (directly from S to Ia/Is)
+                ext_choice_p = copy(ext_infec_vec)
+                ext_choice_p[self.epid != 0] = 0
+                ext_choice_p = ext_choice_p/ext_choice_p.sum()
+                p1 = choice(range(self.N), p = ext_choice_p, replace = False)
+                p2 = np.nan
+                
+                I_type = choice([1,2], p = [1-self.p_s, self.p_s])
+                
+                self.epid[p1] = I_type 
+                
+                if verbose:
+                    if I_type == 1:
+                        print('At time {}, {} becomes asymptomatic!'.format(t_next, p1))
+                    else:
+                        print('At time {}, {} becomes symptomatic!'.format(t_next, p1))
+                        
+                ## log this event
+                event_label = 109 if I_type == 1 else 110 # (in event log, will be 109/110)
+                event_log['time'].append(t_next)
+                event_log['event'].append(event_label)
+                event_log['p1'].append(p1)
+                event_log['p2'].append(p2)
+                
                 
             elif event_type == 1:
                 # recovery:
@@ -575,7 +617,37 @@ if __name__ == '__main__':
 
     EpiNet = HeteroEpiNet(N, phase_bounds, X)
 
-    res, G0, I0 = EpiNet.simulate(T=50, p0=p0, params=pa, verbose=False)          
+    res, G0, I0 = EpiNet.simulate(T=50, p0=p0, params=pa, verbose=False)    
+
+#%%
+# try out simulations with external infection parameters
+if __name__ == '__main__':
+    
+
+    pa = {'beta': 0.05, 'eta': 0.2, 'gamma': 0.1, 
+      'phi': 0.2, 'p_s': 0.6,
+      'alpha':[np.array([0.001,0.001,0.001]), np.array([0.001,0.0002,0.001])],
+      'omega':[np.array([0.005,0.005,0.005]), np.array([0.005,0.05,0.005])],
+      'b_S': np.array([0,-1]),
+      'xi': 0.08, 
+      'b_E': np.array([0,0]),
+      'b_alpha': np.array([0,0]),
+      'b_omega': np.array([0,0])}  
+
+
+    np.random.seed(67)
+
+    # setting here!
+    N = 200; p0 = 0.05
+
+    X = np.random.randint(2, size=(N,2))
+    phase_bounds = [5,30]
+
+    EpiNet = HeteroEpiNet(N, phase_bounds, X)
+
+    res, G0, I0 = EpiNet.simulate(T=50, p0=p0, params=pa, verbose=False)    
+
+  
         
 #%%
 # save example dataset         
@@ -671,6 +743,82 @@ def simulateData(params, N, p0, T, phase_bounds, Xp = 2,
     
     print('Simulation done and info saved! I0 is',I0)
     return
+
+#%% 
+# UPDATE 01/04/2024: simulate data with xi and b_E as parameters too
+def simulateData2(params, N, p0, T, phase_bounds, Xp = 2, 
+                 savepath='/Users/fan/Documents/Research/Hetero_EpiNet_2024rev/', 
+                 dirname = 'ex1',
+                 seed=42):
+    '''
+    params: should be dictionary of parameters
+    N: pop size
+    p0: initial net density
+    T: Tmax
+    phase_bounds: st and en of phase change points
+    Xp: dimensionality of covariate matrix X (only take values in 0 and 1); default 2
+    savepath: the root dir of saving things
+    dirname: the folder name of this simulation's files
+    '''
+    
+    np.random.seed(seed)
+
+    # generate X matrix
+    #X = np.random.randint(2, size=(N,Xp))
+    
+    # Feb 2021 change: replace the 2nd column with Normal(0,0.5) r.v.s
+    X = np.random.normal(scale=0.5, size=(N,Xp))
+    X[:,0] = np.random.randint(2,size=N)
+    
+    # initialize object
+    EpiNet = HeteroEpiNet(N, phase_bounds, X)
+
+    # get simulation results
+    res, G0, I0 = EpiNet.simulate(T=T, p0=p0, params=params, verbose=False, seed=seed)   
+    
+    # create the data dir
+    des = os.path.join(savepath, dirname)
+    if not os.path.exists(des):
+        os.makedirs(des)
+        
+    # save results
+    res.to_csv(os.path.join(des,'dat.csv'),index=False, index_label=False)
+    np.savetxt(os.path.join(des,'G0.txt'),G0)
+    np.savetxt(os.path.join(des,'X.txt'),X)
+    
+    # save settings too
+    net_params = dict()
+    net_params['alpha'] = np.array(params['alpha']).reshape(6)
+    net_params['omega'] = np.array(params['omega']).reshape(6)
+    
+    net_p = pd.DataFrame(net_params)
+    net_p.to_csv(os.path.join(des,'net_params.csv'),index=False, index_label=False)
+    
+    # also the b's (regression)
+    regr_params = dict()
+    regr_params['b_S'] = params['b_S']
+    regr_params['b_alpha'] = params['b_alpha']
+    regr_params['b_omega'] = params['b_omega']
+    regr_params['b_E'] = params['b_E'] if 'b_E' in params.keys() else np.zeros(Xp)
+    
+    regr_p = pd.DataFrame(regr_params)
+    regr_p.to_csv(os.path.join(des,'regr_params.csv'),index=False, index_label=False)
+    
+    # avoid modifying the params dictionary - in case bad things happen
+    pa = copy(params)
+    pa.pop('alpha'); pa.pop('omega');
+    pa.pop('b_S'); pa.pop('b_alpha'); pa.pop('b_omega')
+    if 'b_E' in params.keys():
+        pa.pop('b_E')
+    pa['I0'] = I0[0]
+    pa['stage_change'] = phase_bounds
+    
+    pa = pd.DataFrame(pa)
+    pa.to_csv(os.path.join(des,'params.csv'),index=False, index_label=False)
+    
+    print('Simulation done and info saved! I0 is',I0)
+    return
+
 
 #%%
     
@@ -831,4 +979,234 @@ if __name__ == '__main__':
                      dirname = dirname,
                      seed=s0)
         
+ 
+#%%
+
+# Feb 2021: same stuff but try with N=500
+
+if __name__ == '__main__':
+    
+    # set network regression coefs = 0 for now...
+    # generate 30 datasets
+    # set N = 500 for all datasets
+    
+    N_dat = 30
+    st = 41 # start from 41...
+    
+    for i in range(st,N_dat+st): 
+        s0 = i+191
+        dirname = 'ex'+str(i)
+        
+        N = 500; p0 = 0.02; tmax = 50; stage_change = [20,50]
+        
+        pa = {'beta': 0.1, 'eta': 0.2, 'gamma': 0.1, 
+              'phi': 0.2, 'p_s': 0.6,
+              'alpha':[np.array([0.00006,0.00006,0.00006]), np.array([0.00006,0.00002,0.00006])],
+              'omega':[np.array([0.0005,0.0005,0.0005]), np.array([0.0005,0.005,0.0005])],
+              'b_S': np.array([1,1]),
+              'b_alpha': np.array([0,0]),
+              'b_omega': np.array([0,0])}
+        
+        simulateData(pa, N, p0, tmax, stage_change, Xp = 2, 
+                     savepath='/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/', 
+                     dirname = dirname,
+                     seed=s0)
+
+
+#%%
+
+# Feb 2021: same stuff but try with N=300
+
+if __name__ == '__main__':
+    
+    # set network regression coefs = 0 for now...
+    # generate 30 datasets
+    # set N = 500 for all datasets
+    
+    N_dat = 30
+    st = 71 # start from 71...
+    
+    for i in range(st,N_dat+st): 
+        s0 = i+179
+        dirname = 'ex'+str(i)
+        
+        N = 300; p0 = 0.04; tmax = 50; stage_change = [20,50]
+        
+        pa = {'beta': 0.12, 'eta': 0.2, 'gamma': 0.1, 
+              'phi': 0.2, 'p_s': 0.6,
+              'alpha':[np.array([0.0001,0.0001,0.0001]), np.array([0.0001,0.00003,0.0001])],
+              'omega':[np.array([0.003,0.003,0.003]), np.array([0.003,0.03,0.003])],
+              'b_S': np.array([1,1]),
+              'b_alpha': np.array([0,0]),
+              'b_omega': np.array([0,0])}
+        
+        simulateData(pa, N, p0, tmax, stage_change, Xp = 2, 
+                     savepath='/Users/fan/Documents/Research_and_References/Hetero_EpiNet_2020/', 
+                     dirname = dirname,
+                     seed=s0)
+     
+        
+#%% 
+
+# Jan 2024: simulate with xi and b_E included 
+        
+if __name__ == '__main__':
+    
+    # generate 10 datasets each for N = 100
+    
+    N_dat = 90
+    
+    st = 11
+    
+    for i in range(st,N_dat+st): # start from 1...
+        s0 = i+131
+        #dirname = 'ex'+str(i)
+        
+        if i % 2 == 0:
+            # N = 200 settings
             
+            N = 200; p0 = 0.05; tmax = 50; stage_change = [20,50]
+            pa = {'beta': 0.03, 'eta': 0.2, 'gamma': 0.1, 
+                  'phi': 0.2, 'p_s': 0.6,
+                  'alpha':[np.array([0.0006,0.0006,0.0006]), np.array([0.0006,0.0002,0.0006])],
+                  'omega':[np.array([0.005,0.005,0.005]), np.array([0.005,0.05,0.005])],
+                  'xi': 0.08,
+                  'b_S': np.array([0,1]),
+                  'b_alpha': np.array([0,0]),
+                  'b_omega': np.array([0,0]),
+                  'b_E': np.array([0.5, -0.5])}
+            
+            dirname = 'ex'+str(i)+'N'+str(N)
+            
+        else:
+            # N = 100 settings
+            N = 100; p0 = 0.05; tmax = 50; stage_change = [20,50]
+            pa = {'beta': 0.1, 'eta': 0.2, 'gamma': 0.1, 
+              'phi': 0.2, 'p_s': 0.6,
+              'alpha':[np.array([0.001,0.001,0.001]), np.array([0.001,0.0003,0.001])],
+              'omega':[np.array([0.005,0.005,0.005]), np.array([0.005,0.05,0.005])],
+              'xi': 0.15,
+              'b_S': np.array([0,1]),
+              'b_alpha': np.array([0,0]),
+              'b_omega': np.array([0,0]),
+              'b_E': np.array([0.5, -0.5])}
+            
+            dirname = 'ex'+str(i)+'N'+str(N)
+    
+        simulateData2(pa, N, p0, tmax, stage_change, Xp = 2, 
+                     savepath='/Users/fan/Documents/Research/Hetero_EpiNet_2024rev/', 
+                     dirname = dirname,
+                     seed=s0)
+        
+#%%
+# Jan 27, 2024: posterior predictive checks, sort of
+# simulate by fitted model parameters and see if key statistics make any sense 
+def postSimulateData(params, N, p0, T, phase_bounds, 
+                     dataFilePath = "/Users/fanbu/Downloads/files/",
+                     savepath='/Users/fan/Documents/Research/Hetero_EpiNet_2024rev/', 
+                     dirname = 'postCheck1',
+                     seed=42):
+    '''
+    params: should be dictionary of parameters
+    N: pop size
+    p0: initial net density
+    T: Tmax
+    phase_bounds: st and en of phase change points
+    dataFilePath: the path to load data files from (right now only for X matrix)
+    savepath: the root dir of saving things
+    dirname: the folder name of this simulation's files
+    '''
+    
+    np.random.seed(seed)
+    
+    # read in data objects
+    X = np.loadtxt(os.path.join(dataFilePath, "X.txt"))
+
+    # initialize object
+    EpiNet = HeteroEpiNet(N, phase_bounds, X)
+
+    # get simulation results
+    res, G0, I0 = EpiNet.simulate(T=T, p0=p0, params=params, verbose=False, seed=seed)   
+    
+    # create the data dir
+    des = os.path.join(savepath, dirname)
+    if not os.path.exists(des):
+        os.makedirs(des)
+        
+    # save results
+    res.to_csv(os.path.join(des,'dat.csv'),index=False, index_label=False)
+    np.savetxt(os.path.join(des,'G0.txt'),G0)
+    np.savetxt(os.path.join(des,'X.txt'),X)
+    
+    # save settings too
+    net_params = dict()
+    net_params['alpha'] = np.array(params['alpha']).reshape(6)
+    net_params['omega'] = np.array(params['omega']).reshape(6)
+    
+    net_p = pd.DataFrame(net_params)
+    net_p.to_csv(os.path.join(des,'net_params.csv'),index=False, index_label=False)
+    
+    # also the b's (regression)
+    regr_params = dict()
+    regr_params['b_S'] = params['b_S']
+    regr_params['b_alpha'] = params['b_alpha']
+    regr_params['b_omega'] = params['b_omega']
+    regr_params['b_E'] = params['b_E'] if 'b_E' in params.keys() else np.zeros(np.shape(X)[1])
+    
+    regr_p = pd.DataFrame(regr_params)
+    regr_p.to_csv(os.path.join(des,'regr_params.csv'),index=False, index_label=False)
+    
+    # avoid modifying the params dictionary - in case bad things happen
+    pa = copy(params)
+    pa.pop('alpha'); pa.pop('omega');
+    pa.pop('b_S'); pa.pop('b_alpha'); pa.pop('b_omega')
+    if 'b_E' in params.keys():
+        pa.pop('b_E')
+    pa['I0'] = I0[0]
+    pa['stage_change'] = phase_bounds
+    
+    pa = pd.DataFrame(pa)
+    pa.to_csv(os.path.join(des,'params.csv'),index=False, index_label=False)
+    
+    print('Simulation done and info saved! I0 is',I0)
+    return
+
+
+
+
+#%%
+# generate according to 
+
+if __name__ == '__main__':
+    
+    nSim = 50
+    
+    for i in range(50, 50+nSim):
+    
+        s0 = 71 + i
+        #dirname = 'ex'+str(i)
+            
+        N = 103; p0 = 0; 
+        tmax = 63; 
+        stage_change = [35,63]
+        
+        pa = {'beta': 4.497, 'eta': -2.7774, 'gamma': 0.161, 
+              'phi': 0.221, 'p_s': 0.382,
+              'alpha':[np.array([0.018127950, 0.0153, 0.003097859])*4, 
+                       np.array([0.008672287, 0.00653, 0.006777730])*4],
+              'omega':[np.array([11.62,  16.62,  24.291893])*4, 
+                       np.array([5.268334,  8.47, 113.613356])*4],
+              'xi': 0.004450555,
+              'b_S': np.array([-0.105, -2.42, -0.201, -0.0541]),
+              'b_alpha': np.array([0,0,0,0]),
+              'b_omega': np.array([0,0,0,0]),
+              'b_E': np.array([-0.80538116, -0.13870287,  0.25680188, -0.03618035])}
+            
+        dirname = 'postSimulate'+str(i)
+            
+        postSimulateData(pa, N, p0, tmax, stage_change, 
+                     savepath='/Users/fanbu/Downloads/Hetero-EpiNet-postCheck/', 
+                     dirname = dirname,
+                     seed=s0)
+    
+    
